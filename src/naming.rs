@@ -61,8 +61,44 @@ impl Resolver {
                     self.report(format!("Reference to undeclared variable: {name}"));
                 }
             }
-            // TODO: 残りは後で実装
-            _ => {}
+
+            // リテラル：何もしない
+            Expression::Number(_) | Expression::String(_) | Expression::Boolean(_) => {}
+
+            // 子を全部訪問
+            Expression::Binary { left, right, .. } => {
+                self.visit_expression(left);
+                self.visit_expression(right);
+            }
+            Expression::Conditional {
+                test,
+                consequent,
+                alternate,
+            } => {
+                self.visit_expression(test);
+                self.visit_expression(consequent);
+                self.visit_expression(alternate);
+            }
+            Expression::Call { callee, arguments } => {
+                self.visit_expression(callee);
+                for arg in arguments {
+                    self.visit_expression(arg);
+                }
+            }
+            Expression::Array(elements) => {
+                for elem in elements {
+                    self.visit_expression(elem);
+                }
+            }
+            Expression::Member { object, index } => {
+                self.visit_expression(object);
+                self.visit_expression(index);
+            }
+
+            // アロー関数
+            Expression::ArrowFunction { .. } => {
+                // TODO: スコープ管理が必要なので後で実装
+            }
         }
     }
 }
@@ -106,5 +142,43 @@ mod tests {
     fn declared_variable_can_be_referenced() {
         let stmts = compile("const x = 1; const y = x;");
         assert_eq!(name_check(&stmts), vec![]);
+    }
+
+    #[test]
+    fn check_binary_with_undeclared() {
+        let stmts = compile("const a = 1; const b = a + c;");
+        let errors = name_check(&stmts);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].message.contains("c"));
+    }
+
+    #[test]
+    fn check_ternary_all_referenced() {
+        let stmts = compile("const result = a ? b : c;");
+        let errors = name_check(&stmts);
+        assert_eq!(errors.len(), 3); // a, b, c 全部未宣言
+    }
+
+    #[test]
+    fn check_call_arguments() {
+        let stmts = compile("const x = f(a, b);");
+        let errors = name_check(&stmts);
+        assert_eq!(errors.len(), 3); // f, a, b 全部未宣言
+    }
+
+    #[test]
+    fn check_array_elements() {
+        let stmts = compile("const xs = [a, 1, b];");
+        let errors = name_check(&stmts);
+        assert_eq!(errors.len(), 2); // a, b
+    }
+
+    #[test]
+    fn check_nested_expressions() {
+        // 既存変数は OK、未宣言だけ拾う
+        let stmts = compile("const a = 1; const x = (a + unknown) * 2;");
+        let errors = name_check(&stmts);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].message.contains("unknown"));
     }
 }
