@@ -126,7 +126,29 @@ impl Parser {
     }
 
     fn parse_expression(&mut self) -> Expression {
-        self.parse_binary()
+        let test = self.parse_binary();
+
+        if matches!(self.peek(), Token::Ternary) {
+            self.advance(); // ?を消費
+
+            let consequent = self.parse_expression();
+
+            // : を期待
+            match self.advance() {
+                Token::Colon => {}
+                other => panic!("Expected ':' in ternary, got {other:?}"),
+            }
+
+            let alternate = self.parse_expression();
+
+            Expression::Conditional {
+                test: Box::new(test),
+                consequent: Box::new(consequent),
+                alternate: Box::new(alternate),
+            }
+        } else {
+            test
+        }
     }
 
     fn parse_binary(&mut self) -> Expression {
@@ -343,6 +365,39 @@ mod tests {
                 assert_eq!(*op, BinaryOp::Multiply);
             } else {
                 panic!("expected Binary, got {init:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn parse_ternary() {
+        let tokens = tokenize(r#"const x = true ? 1 : 2;"#);
+        let stmts = parse(tokens);
+        assert_eq!(
+            stmts,
+            vec![Statement::ConstDeclaration {
+                name: "x".to_string(),
+                type_annotation: None,
+                init: Expression::Conditional {
+                    test: Box::new(Expression::Boolean(true)),
+                    consequent: Box::new(Expression::Number(1)),
+                    alternate: Box::new(Expression::Number(2)),
+                },
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_ternary_right_associative() {
+        // a ? b : c ? d : e → a ? b : (c ? d : e)
+        let tokens = tokenize("const x = a ? b : c ? d : e;");
+        let stmts = parse(tokens);
+        if let Statement::ConstDeclaration { init, .. } = &stmts[0] {
+            if let Expression::Conditional { alternate, .. } = init {
+                // 外側の alternate が Conditional であることを確認
+                assert!(matches!(**alternate, Expression::Conditional { .. }));
+            } else {
+                panic!("expected Conditional");
             }
         }
     }
