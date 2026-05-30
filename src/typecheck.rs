@@ -192,6 +192,71 @@ impl TypeChecker {
                     }
                 }
             }
+            Expression::Conditional {
+                test,
+                consequent,
+                alternate,
+            } => {
+                let test_type = self.visit_expression(test);
+                let consequent_type = self.visit_expression(consequent);
+                let alternate_type = self.visit_expression(alternate);
+
+                // test は Boolean であるべき
+                let boolean = self.concrete("Boolean");
+                let test_concrete = self.concrete_name(test_type);
+                if let Some(name) = &test_concrete {
+                    if name != "Boolean" {
+                        self.report(format!(
+                            "Type mismatch in ternary: condition must be Boolean, got {name}"
+                        ));
+                    }
+                } else {
+                    self.unify(test_type, boolean);
+                }
+
+                // consequent と alternate は同じ型であるべき
+                let consequent_concrete = self.concrete_name(consequent_type);
+                let alternate_concrete = self.concrete_name(alternate_type);
+                if let (Some(c), Some(a)) = (&consequent_concrete, &alternate_concrete) {
+                    if c != a {
+                        self.report(format!(
+                "Type mismatch in ternary: branches must have the same type, got {c} and {a}"
+            ));
+                    }
+                } else {
+                    self.unify(consequent_type, alternate_type);
+                }
+
+                consequent_type
+            }
+
+            Expression::Array(elements) => {
+                if elements.is_empty() {
+                    return self.concrete("Array");
+                }
+
+                // 最初の要素を基準にする
+                let first_type = self.visit_expression(&elements[0]);
+                let first_concrete = self.concrete_name(first_type);
+
+                for elem in &elements[1..] {
+                    let elem_type = self.visit_expression(elem);
+                    let elem_concrete = self.concrete_name(elem_type);
+
+                    if let (Some(f), Some(e)) = (&first_concrete, &elem_concrete) {
+                        if f != e {
+                            self.report(format!(
+                    "Type mismatch in array literal: array elements must have consistent types, found {f} and {e}"
+                ));
+                            continue;
+                        }
+                    }
+
+                    self.unify(first_type, elem_type);
+                }
+
+                self.concrete("Array")
+            }
 
             _ => self.fresh_var(), // TODO: 後で実装
         }
@@ -316,6 +381,61 @@ mod tests {
     fn type_check_chain() {
         // 1 + 2 + 3 → 全部 Number、エラーなし
         let stmts = crate::compile("const x = 1 + 2 + 3;");
+        assert_eq!(type_check(&stmts), vec![]);
+    }
+
+    #[test]
+    fn type_check_ternary_ok() {
+        let stmts = crate::compile("const x = true ? 1 : 2;");
+        assert_eq!(type_check(&stmts), vec![]);
+    }
+
+    #[test]
+    fn type_check_ternary_test_not_boolean() {
+        let stmts = crate::compile("const x = 1 ? 1 : 2;");
+        let errors = type_check(&stmts);
+        assert!(errors.iter().any(|e| e.message.contains("Boolean")));
+    }
+
+    #[test]
+    fn type_check_ternary_branches_mismatch() {
+        let stmts = crate::compile(r#"const x = true ? 1 : "hi";"#);
+        let errors = type_check(&stmts);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("Number") && e.message.contains("String"))
+        );
+    }
+
+    #[test]
+    fn type_check_ternary_string_branches() {
+        let stmts = crate::compile(r#"const x = true ? "a" : "b";"#);
+        assert_eq!(type_check(&stmts), vec![]);
+    }
+
+    #[test]
+    fn type_check_array_ok() {
+        let stmts = crate::compile("const xs = [1, 2, 3];");
+        assert_eq!(type_check(&stmts), vec![]);
+    }
+
+    #[test]
+    fn type_check_array_empty() {
+        let stmts = crate::compile("const xs = [];");
+        assert_eq!(type_check(&stmts), vec![]);
+    }
+
+    #[test]
+    fn type_check_array_mixed() {
+        let stmts = crate::compile(r#"const xs = [1, "two", 3];"#);
+        let errors = type_check(&stmts);
+        assert!(errors.iter().any(|e| e.message.contains("consistent")));
+    }
+
+    #[test]
+    fn type_check_array_strings() {
+        let stmts = crate::compile(r#"const xs = ["a", "b", "c"];"#);
         assert_eq!(type_check(&stmts), vec![]);
     }
 }
