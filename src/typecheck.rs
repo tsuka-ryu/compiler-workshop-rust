@@ -172,10 +172,11 @@ impl TypeChecker {
         match stmt {
             Statement::ConstDeclaration { name, init, .. } => {
                 let init_type = self.visit_expression(init);
-                self.scope
-                    .insert(name.clone(), TypeScheme::monomorphic(init_type));
+                let scheme = self.generalize(init_type);
+                self.scope.insert(name.clone(), scheme);
                 init_type
             }
+
             Statement::Return { argument } => match argument {
                 Some(expr) => self.visit_expression(expr),
                 None => self.concrete("Void"),
@@ -381,13 +382,21 @@ impl TypeChecker {
         }
     }
 
-    /// スキームを TypeId に展開する（Phase 2 Step 9 で本実装）
+    /// スキームを TypeId に展開する
     fn instantiate(&mut self, scheme: &TypeScheme) -> TypeId {
         if scheme.vars.is_empty() {
             return scheme.body;
         }
-        // TODO: ちゃんと量化変数を fresh var に置換する
-        scheme.body
+
+        // 量化された各変数に新しい fresh var を割り当てる
+        let mut subst: HashMap<TypeId, TypeId> = HashMap::new();
+        for &v in &scheme.vars {
+            let fresh = self.fresh_var();
+            subst.insert(v, fresh);
+        }
+
+        // 置換しながら型のコピーを作る
+        self.copy_with_subst(scheme.body, &subst)
     }
 
     /// 型に含まれる Var の TypeId をすべて集める
@@ -450,6 +459,38 @@ impl TypeChecker {
         TypeScheme {
             vars: quantified,
             body: t,
+        }
+    }
+
+    /// 型のコピーを作りながら、subst に従って Var を置換する
+    fn copy_with_subst(&mut self, id: TypeId, subst: &HashMap<TypeId, TypeId>) -> TypeId {
+        let id = self.resolve(id);
+        match self.db[id].clone() {
+            DbEntry::Var => {
+                if let Some(&new) = subst.get(&id) {
+                    new
+                } else {
+                    id // 量化されていない Var はそのまま共有
+                }
+            }
+            DbEntry::Concrete(_) => id, // 具象型はイミュータブルなので共有
+            DbEntry::Function {
+                params,
+                return_type,
+            } => {
+                let new_params: Vec<TypeId> = params
+                    .iter()
+                    .map(|p| self.copy_with_subst(*p, subst))
+                    .collect();
+                let new_return = self.copy_with_subst(return_type, subst);
+                let new_id = self.db.len();
+                self.db.push(DbEntry::Function {
+                    params: new_params,
+                    return_type: new_return,
+                });
+                new_id
+            }
+            DbEntry::Symlink(_) => unreachable!("resolve should collapse Symlinks"),
         }
     }
 }
@@ -753,5 +794,53 @@ mod tests {
         // outer は環境にあるので量化されない、T は量化される
         assert!(scheme.vars.contains(&t));
         assert!(!scheme.vars.contains(&outer));
+    }
+
+    #[test]
+    fn let_polymorphism_id_with_different_types() {
+        let stmts = crate::compile(
+            "const id = (x) => { return x; };
+         const a = id(5);
+         const b = id(\"hi\");",
+        );
+        assert_eq!(type_check(&stmts), vec![]);
+    }
+
+    #[test]
+    fn let_polymorphism_id_then_bool() {
+        let stmts = crate::compile(
+            "const id = (x) => { return x; };
+         const a = id(true);
+         const b = id(1);",
+        );
+        assert_eq!(type_check(&stmts), vec![]);
+    }
+
+    #[test]
+    fn monomorphic_function_still_constrains() {
+        // inc は Number → Number に固定される
+        let stmts = crate::compile(
+            "const inc = (x) => { return x + 1; };
+         const a = inc(\"hi\");", // ← エラー
+        );
+        let errors = type_check(&stmts);
+        assert!(
+            !errors.is_empty(),
+            "Number-only function should reject String"
+        );
+    }
+
+    #[test]
+    fn env_aware_generalize() {
+        // 外側 outer の x の型と、内側 inner の型が共有される
+        // inner の x 部分は generalize で量化されない
+        let stmts = crate::compile(
+            "const outer = (x) => {
+            const inner = (y) => { return x; };
+            return inner(5);
+         };",
+        );
+        // エラーが出ないことを確認
+        assert_eq!(type_check(&stmts), vec![]);
     }
 }
