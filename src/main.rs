@@ -15,6 +15,7 @@ mod tests {
                 Token::Eq,
                 Token::Number(5),
                 Token::Semicolon,
+                Token::EoF
             ]
         );
     }
