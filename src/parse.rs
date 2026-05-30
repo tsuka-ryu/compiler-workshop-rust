@@ -96,7 +96,31 @@ impl Parser {
                 Token::RParen => {
                     depth -= 1;
                     if depth == 0 {
-                        return matches!(self.tokens.get(i + 1), Some(Token::Arrow));
+                        let mut j = i + 1;
+                        // 戻り値の型注釈`: SomeType`をスキップ（簡易版）
+                        // 戻り値の型が`Array<T>`やT[]だと壊れる
+                        if matches!(self.tokens.get(j), Some(Token::Colon)) {
+                            j += 1;
+                            // 型トークンを1つだけスキップ。Array<T> や T[] は未対応
+                            if matches!(
+                                self.tokens.get(j),
+                                Some(
+                                    Token::TypeNumber
+                                        | Token::TypeString
+                                        | Token::TypeBoolean
+                                        | Token::TypeVoid
+                                        | Token::TypeInt
+                                        | Token::TypeFloat
+                                        | Token::TypeBool
+                                        | Token::TypeUnit
+                                        | Token::TypeArray
+                                        | Token::Ident(_)
+                                )
+                            ) {
+                                j += 1;
+                            }
+                        }
+                        return matches!(self.tokens.get(j), Some(Token::Arrow));
                     }
                 }
                 _ => {}
@@ -115,13 +139,20 @@ impl Parser {
     }
 
     fn parse_const_declaration(&mut self) -> Statement {
-        // const
-        self.advance();
+        self.advance(); // const
 
         // 識別子
         let name = match self.advance() {
             Token::Ident(s) => s,
             other => panic!("Expected identifier, got {other:?}"),
+        };
+
+        // : 型があれば読む
+        let type_annotation = if matches!(self.peek(), Token::Colon) {
+            self.advance(); // : を消費
+            Some(self.parse_type_annotation())
+        } else {
+            None
         };
 
         // =
@@ -140,7 +171,7 @@ impl Parser {
 
         Statement::ConstDeclaration {
             name,
-            type_annotation: None,
+            type_annotation,
             init,
         }
     }
@@ -335,9 +366,18 @@ impl Parser {
                     Token::Ident(s) => s,
                     other => panic!("Expected param name, got {other:?}"),
                 };
+
+                // 引数の型注釈
+                let type_annotation = if matches!(self.peek(), Token::Colon) {
+                    self.advance();
+                    Some(self.parse_type_annotation())
+                } else {
+                    None
+                };
+
                 params.push(Parameter {
                     name,
-                    type_annotation: None,
+                    type_annotation,
                 });
 
                 match self.peek() {
@@ -354,6 +394,14 @@ impl Parser {
             Token::RParen => {}
             other => panic!("Expected ')', got {other:?}"),
         }
+
+        // 戻り値の型注釈
+        let return_type = if matches!(self.peek(), Token::Colon) {
+            self.advance();
+            Some(self.parse_type_annotation())
+        } else {
+            None
+        };
 
         // => を消費
         match self.advance() {
@@ -378,9 +426,50 @@ impl Parser {
 
         Expression::ArrowFunction {
             params,
-            return_type: None,
+            return_type,
             body,
         }
+    }
+
+    fn parse_type_annotation(&mut self) -> TypeAnnotation {
+        // : は呼び出し側で消費済み
+        let base = match self.advance() {
+            Token::TypeNumber => TypeAnnotation::Named("number".to_string()),
+            Token::TypeString => TypeAnnotation::Named("string".to_string()),
+            Token::TypeBoolean => TypeAnnotation::Named("boolean".to_string()),
+            Token::TypeVoid => TypeAnnotation::Named("void".to_string()),
+            Token::TypeInt => TypeAnnotation::Named("Void".to_string()),
+            Token::TypeFloat => TypeAnnotation::Named("Float".to_string()),
+            Token::TypeBool => TypeAnnotation::Named("Bool".to_string()),
+            Token::TypeUnit => TypeAnnotation::Named("Unit".to_string()),
+            Token::TypeArray => {
+                // Array<T> 形式
+                if matches!(self.peek(), Token::LessThan) {
+                    self.advance(); // <
+                    let elem = self.parse_type_annotation();
+                    match self.advance() {
+                        Token::GreaterThan => {}
+                        other => panic!("Expected '>', got {other:?}"),
+                    }
+                    return TypeAnnotation::Array(Box::new(elem));
+                }
+                TypeAnnotation::Named("Array".to_string())
+            }
+            Token::Ident(name) => TypeAnnotation::Named(name),
+            other => panic!("Expected type annotation, got {other:?}"),
+        };
+
+        // T[] 形式の後置 []
+        if matches!(self.peek(), Token::LBracket) {
+            self.advance();
+            match self.advance() {
+                Token::RBracket => {}
+                other => panic!("Expected ']' in array type, got {other:?}"),
+            }
+            return TypeAnnotation::Array(Box::new(base));
+        }
+
+        base
     }
 }
 
@@ -761,6 +850,55 @@ mod tests {
         let stmts = parse(tokens);
         if let Statement::ConstDeclaration { init, .. } = &stmts[0] {
             assert!(matches!(init, Expression::Binary { .. }));
+        }
+    }
+
+    #[test]
+    fn parse_const_with_type() {
+        let tokens = tokenize("const x: number = 5;");
+        let stmts = parse(tokens);
+        assert_eq!(
+            stmts,
+            vec![Statement::ConstDeclaration {
+                name: "x".to_string(),
+                type_annotation: Some(TypeAnnotation::Named("number".to_string())),
+                init: Expression::Number(5),
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_arrow_with_types() {
+        let tokens = tokenize("const add = (a: number, b: number): number => { return a + b; };");
+        let stmts = parse(tokens);
+        if let Statement::ConstDeclaration { init, .. } = &stmts[0] {
+            if let Expression::ArrowFunction {
+                params,
+                return_type,
+                ..
+            } = init
+            {
+                assert_eq!(
+                    params[0].type_annotation,
+                    Some(TypeAnnotation::Named("number".to_string()))
+                );
+                assert_eq!(
+                    *return_type,
+                    Some(TypeAnnotation::Named("number".to_string()))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn parse_array_type() {
+        let tokens = tokenize("const xs: number[] = [];");
+        let stmts = parse(tokens);
+        if let Statement::ConstDeclaration {
+            type_annotation, ..
+        } = &stmts[0]
+        {
+            assert!(matches!(type_annotation, Some(TypeAnnotation::Array(_))));
         }
     }
 }
