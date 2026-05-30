@@ -1,5 +1,5 @@
 use crate::parse::{BinaryOp, Expression, Statement};
-use std::{collections::HashMap, fmt::Binary};
+use std::collections::HashMap;
 
 pub type TypeId = usize;
 
@@ -258,7 +258,53 @@ impl TypeChecker {
                 self.concrete("Array")
             }
 
-            _ => self.fresh_var(), // TODO: 後で実装
+            Expression::ArrowFunction { params, body, .. } => {
+                // body を訪問（最後の文の型を取る）
+                let mut body_type = self.concrete("Void");
+                for stmt in body {
+                    body_type = self.visit_statement(stmt);
+                }
+                let _ = body_type; // 本格的にやるなら return_type と unify する
+
+                // 各 param には fresh var を割り当てる
+                // （現在のスコープに登録もする：JS版は雑だが丁寧にやってもいい）
+                for param in params {
+                    let param_type = self.fresh_var();
+                    self.scope.insert(param.name.clone(), param_type);
+                }
+
+                // 関数全体の型として fresh var を1つ返す
+                self.fresh_var()
+            }
+
+            Expression::Call { callee, arguments } => {
+                let callee_type = self.visit_expression(callee);
+                let _ = callee_type;
+
+                let return_type = self.fresh_var();
+
+                if !arguments.is_empty() {
+                    let arg_types: Vec<TypeId> = arguments
+                        .iter()
+                        .map(|arg| self.visit_expression(arg))
+                        .collect();
+
+                    // JS版の特殊処理：単一引数の場合、戻り値型 = 引数型と仮定（恒等関数想定）
+                    if let Expression::Identifier(name) = callee.as_ref() {
+                        if self.scope.contains_key(name) && arguments.len() == 1 {
+                            self.unify(return_type, arg_types[0]);
+                        }
+                    }
+                }
+
+                return_type
+            }
+
+            Expression::Member { object, index } => {
+                self.visit_expression(object);
+                self.visit_expression(index);
+                self.fresh_var() // 要素型は不明
+            }
         }
     }
 }
@@ -436,6 +482,30 @@ mod tests {
     #[test]
     fn type_check_array_strings() {
         let stmts = crate::compile(r#"const xs = ["a", "b", "c"];"#);
+        assert_eq!(type_check(&stmts), vec![]);
+    }
+
+    #[test]
+    fn type_check_arrow_function() {
+        let stmts = crate::compile("const f = (x) => { return x; };");
+        assert_eq!(type_check(&stmts), vec![]);
+    }
+
+    #[test]
+    fn type_check_arrow_with_body() {
+        let stmts = crate::compile("const inc = (x) => { return x + 1; };");
+        assert_eq!(type_check(&stmts), vec![]);
+    }
+
+    #[test]
+    fn type_check_call() {
+        let stmts = crate::compile("const f = (x) => { return x; }; const r = f(5);");
+        assert_eq!(type_check(&stmts), vec![]);
+    }
+
+    #[test]
+    fn type_check_call_in_expression() {
+        let stmts = crate::compile("const f = (x) => { return x; }; const r = f(1) + 2;");
         assert_eq!(type_check(&stmts), vec![]);
     }
 }

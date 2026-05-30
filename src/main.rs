@@ -39,4 +39,25 @@ mod tests {
             }]
         );
     }
+
+    #[test]
+    fn full_pipeline_clean() {
+        let result = compiler_workshop::compile_full("const x = 1 + 2;");
+        assert!(result.naming_errors.is_empty());
+        assert!(result.type_errors.is_empty());
+    }
+
+    #[test]
+    fn full_pipeline_naming_error() {
+        let result = compiler_workshop::compile_full("const x = y;");
+        assert_eq!(result.naming_errors.len(), 1);
+        assert!(result.type_errors.is_empty());
+    }
+
+    #[test]
+    fn full_pipeline_type_error() {
+        let result = compiler_workshop::compile_full(r#"const x = 1 + "hi";"#);
+        assert!(result.naming_errors.is_empty());
+        assert_eq!(result.type_errors.len(), 1);
+    }
 }
