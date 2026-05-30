@@ -96,8 +96,22 @@ impl Resolver {
             }
 
             // アロー関数
-            Expression::ArrowFunction { .. } => {
-                // TODO: スコープ管理が必要なので後で実装
+            Expression::ArrowFunction { params, body, .. } => {
+                // 新スコープ
+                self.scopes.push(HashSet::new());
+
+                // パラメータを宣言
+                for param in params {
+                    self.declare(&param.name);
+                }
+
+                // 本体の文を訪問
+                for stmt in body {
+                    self.visit_statement(stmt);
+                }
+
+                // スコープを破棄
+                self.scopes.pop();
             }
         }
     }
@@ -180,5 +194,48 @@ mod tests {
         let errors = name_check(&stmts);
         assert_eq!(errors.len(), 1);
         assert!(errors[0].message.contains("unknown"));
+    }
+
+    #[test]
+    fn arrow_function_param_visible_in_body() {
+        let stmts = compile("const f = (x) => { return x; };");
+        assert_eq!(name_check(&stmts), vec![]);
+    }
+
+    #[test]
+    fn arrow_function_param_not_visible_outside() {
+        let stmts = compile("const f = (x) => { return 1; }; const y = x;");
+        let errors = name_check(&stmts);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].message.contains("x"));
+    }
+
+    #[test]
+    fn arrow_function_can_access_outer_const() {
+        let stmts = compile("const a = 1; const f = (x) => { return a + x; };");
+        assert_eq!(name_check(&stmts), vec![]);
+    }
+
+    #[test]
+    fn arrow_function_undeclared_in_body() {
+        let stmts = compile("const f = (x) => { return y; };");
+        let errors = name_check(&stmts);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].message.contains("y"));
+    }
+
+    #[test]
+    fn duplicate_param_names() {
+        let stmts = compile("const f = (x, x) => { return x; };");
+        let errors = name_check(&stmts);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].message.contains("Duplicate"));
+    }
+
+    #[test]
+    fn nested_arrow_functions() {
+        // 外側の関数の x は内側からも見える
+        let stmts = compile("const f = (x) => { return (y) => { return x; }; };");
+        assert_eq!(name_check(&stmts), vec![]);
     }
 }
