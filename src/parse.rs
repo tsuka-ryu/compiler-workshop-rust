@@ -111,7 +111,7 @@ impl Parser {
         }
 
         // 初期化式
-        let init = self.parser_expression();
+        let init = self.parse_expression();
 
         // 末尾の;があれば消費
         if matches!(self.peek(), Token::Semicolon) {
@@ -125,11 +125,32 @@ impl Parser {
         }
     }
 
-    fn parser_expression(&mut self) -> Expression {
-        self.parser_primary()
+    fn parse_expression(&mut self) -> Expression {
+        self.parse_binary()
     }
 
-    fn parser_primary(&mut self) -> Expression {
+    fn parse_binary(&mut self) -> Expression {
+        let mut left = self.parse_primary();
+
+        loop {
+            let op = match self.peek() {
+                Token::Plus => BinaryOp::Add,
+                Token::Multiply => BinaryOp::Multiply,
+                _ => break,
+            };
+            self.advance(); // 演算子を消費
+            let right = self.parse_primary();
+            left = Expression::Binary {
+                left: Box::new(left),
+                op,
+                right: Box::new(right),
+            }
+        }
+
+        left
+    }
+
+    fn parse_primary(&mut self) -> Expression {
         match self.advance() {
             Token::Number(n) => Expression::Number(n),
             Token::StringLit(s) => Expression::String(s),
@@ -147,7 +168,7 @@ impl Parser {
         let argument = if matches!(self.peek(), Token::Semicolon | Token::RCurly | Token::EoF) {
             None
         } else {
-            Some(self.parser_expression())
+            Some(self.parse_expression())
         };
 
         // 末尾の ; があれば消費
@@ -267,5 +288,62 @@ mod tests {
                 init: Expression::Identifier("x".to_string()),
             }]
         );
+    }
+
+    #[test]
+    fn parse_addition() {
+        let tokens = tokenize("const x = 1 + 2;");
+        let stmts = parse(tokens);
+        assert_eq!(
+            stmts,
+            vec![Statement::ConstDeclaration {
+                name: "x".to_string(),
+                type_annotation: None,
+                init: Expression::Binary {
+                    left: Box::new(Expression::Number(1)),
+                    op: BinaryOp::Add,
+                    right: Box::new(Expression::Number(2)),
+                },
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_left_associative() {
+        // 1 + 2 + 3 → ((1 + 2) + 3)
+        let tokens = tokenize("const x = 1 + 2 + 3;");
+        let stmts = parse(tokens);
+        let expected = Expression::Binary {
+            left: Box::new(Expression::Binary {
+                left: Box::new(Expression::Number(1)),
+                op: BinaryOp::Add,
+                right: Box::new(Expression::Number(2)),
+            }),
+            op: BinaryOp::Add,
+            right: Box::new(Expression::Number(3)),
+        };
+        assert_eq!(
+            stmts,
+            vec![Statement::ConstDeclaration {
+                name: "x".to_string(),
+                type_annotation: None,
+                init: expected,
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_mixed_operators() {
+        // 1 + 2 * 3 → ((1 + 2) * 3)（JS版は同じ優先順位の左結合）
+        let tokens = tokenize("const x = 1 + 2 * 3;");
+        let stmts = parse(tokens);
+        if let Statement::ConstDeclaration { init, .. } = &stmts[0] {
+            // 一番外側が * になることを確認
+            if let Expression::Binary { op, .. } = init {
+                assert_eq!(*op, BinaryOp::Multiply);
+            } else {
+                panic!("expected Binary, got {init:?}");
+            }
+        }
     }
 }
