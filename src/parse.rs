@@ -126,8 +126,15 @@ impl Parser {
     }
 
     fn parser_expression(&mut self) -> Expression {
+        self.parser_primary()
+    }
+
+    fn parser_primary(&mut self) -> Expression {
         match self.advance() {
             Token::Number(n) => Expression::Number(n),
+            Token::StringLit(s) => Expression::String(s),
+            Token::Boolean(b) => Expression::Boolean(b),
+            Token::Ident(name) => Expression::Identifier(name),
             other => panic!("Unexpected token in expression: {other:?}"),
         }
     }
@@ -217,6 +224,48 @@ mod tests {
                     init: Expression::Number(2),
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn parse_const_string() {
+        let tokens = tokenize(r#"const msg = "hello";"#);
+        let stmts = parse(tokens);
+        assert_eq!(
+            stmts,
+            vec![Statement::ConstDeclaration {
+                name: "msg".to_string(),
+                type_annotation: None,
+                init: Expression::String("hello".to_string()),
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_const_boolean() {
+        let tokens = tokenize("const flag = true;");
+        let stmts = parse(tokens);
+        assert_eq!(
+            stmts,
+            vec![Statement::ConstDeclaration {
+                name: "flag".to_string(),
+                type_annotation: None,
+                init: Expression::Boolean(true),
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_const_identifier() {
+        let tokens = tokenize("const y = x;");
+        let stmts = parse(tokens);
+        assert_eq!(
+            stmts,
+            vec![Statement::ConstDeclaration {
+                name: "y".to_string(),
+                type_annotation: None,
+                init: Expression::Identifier("x".to_string()),
+            }]
         );
     }
 }
