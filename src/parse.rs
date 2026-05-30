@@ -192,21 +192,38 @@ impl Parser {
     }
 
     fn parse_primary(&mut self) -> Expression {
-        match self.advance() {
+        let mut expr = match self.advance() {
             Token::Number(n) => Expression::Number(n),
             Token::StringLit(s) => Expression::String(s),
             Token::Boolean(b) => Expression::Boolean(b),
-            Token::Ident(name) => {
-                let callee = Expression::Identifier(name);
-                if matches!(self.peek(), Token::LParen) {
-                    self.parse_call(callee)
-                } else {
-                    callee
-                }
-            }
+            Token::Ident(name) => Expression::Identifier(name),
             Token::LBracket => self.parse_array(),
             other => panic!("Unexpected token in expression: {other:?}"),
+        };
+
+        // 後置: ( で呼び出し [ でメンバアクセスを繰り返す
+        loop {
+            match self.peek() {
+                Token::LParen => {
+                    expr = self.parse_call(expr);
+                }
+                Token::LBracket => {
+                    self.advance();
+                    let index = self.parse_expression();
+                    match self.advance() {
+                        Token::RBracket => {}
+                        other => panic!("Expected ']' in member access, got {other:?}"),
+                    }
+                    expr = Expression::Member {
+                        object: Box::new(expr),
+                        index: Box::new(index),
+                    }
+                }
+                _ => break,
+            }
         }
+
+        expr
     }
 
     fn parse_call(&mut self, callee: Expression) -> Expression {
@@ -566,6 +583,56 @@ mod tests {
             assert!(matches!(items[0], Expression::Number(1)));
             assert!(matches!(items[1], Expression::String(_)));
             assert!(matches!(items[2], Expression::Boolean(true)));
+        }
+    }
+
+    #[test]
+    fn parse_member_access() {
+        let tokens = tokenize("const x = arr[0];");
+        let stmts = parse(tokens);
+        assert_eq!(
+            stmts,
+            vec![Statement::ConstDeclaration {
+                name: "x".to_string(),
+                type_annotation: None,
+                init: Expression::Member {
+                    object: Box::new(Expression::Identifier("arr".to_string())),
+                    index: Box::new(Expression::Number(0)),
+                },
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_member_chained() {
+        // arr[0][1] → Member(Member(arr, 0), 1)
+        let tokens = tokenize("const x = arr[0][1];");
+        let stmts = parse(tokens);
+        if let Statement::ConstDeclaration { init, .. } = &stmts[0] {
+            if let Expression::Member { object, index } = init {
+                assert!(matches!(**index, Expression::Number(1)));
+                assert!(matches!(**object, Expression::Member { .. }));
+            }
+        }
+    }
+
+    #[test]
+    fn parse_call_then_member() {
+        // f()[0]
+        let tokens = tokenize("const x = f()[0];");
+        let stmts = parse(tokens);
+        if let Statement::ConstDeclaration { init, .. } = &stmts[0] {
+            assert!(matches!(init, Expression::Member { .. }));
+        }
+    }
+
+    #[test]
+    fn parse_member_then_call() {
+        // arr[0]()
+        let tokens = tokenize("const x = arr[0]();");
+        let stmts = parse(tokens);
+        if let Statement::ConstDeclaration { init, .. } = &stmts[0] {
+            assert!(matches!(init, Expression::Call { .. }));
         }
     }
 }
