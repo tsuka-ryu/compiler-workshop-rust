@@ -89,6 +89,7 @@ impl Parser {
     fn parse_statement(&mut self) -> Statement {
         match self.peek() {
             Token::Const => self.parse_const_declaration(),
+            Token::Return => self.parse_return_statement(),
             other => panic!("Unexpected token: {other:?}"),
         }
     }
@@ -130,6 +131,25 @@ impl Parser {
             other => panic!("Unexpected token in expression: {other:?}"),
         }
     }
+
+    fn parse_return_statement(&mut self) -> Statement {
+        // return
+        self.advance();
+
+        // 引数は省略可能。次が ; か } EoFなら省略
+        let argument = if matches!(self.peek(), Token::Semicolon | Token::RCurly | Token::EoF) {
+            None
+        } else {
+            Some(self.parser_expression())
+        };
+
+        // 末尾の ; があれば消費
+        if matches!(self.peek(), Token::Semicolon) {
+            self.advance();
+        }
+
+        Statement::Return { argument }
+    }
 }
 
 pub fn parse(tokens: Vec<Token>) -> Vec<Statement> {
@@ -157,6 +177,46 @@ mod tests {
                 type_annotation: None,
                 init: Expression::Number(5),
             }]
+        );
+    }
+
+    #[test]
+    fn parse_return_with_number() {
+        let tokens = tokenize("return 42;");
+        let stmts = parse(tokens);
+        assert_eq!(
+            stmts,
+            vec![Statement::Return {
+                argument: Some(Expression::Number(42))
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_return_empty() {
+        let tokens = tokenize("return;");
+        let stmts = parse(tokens);
+        assert_eq!(stmts, vec![Statement::Return { argument: None }]);
+    }
+
+    #[test]
+    fn parse_multiple_statements() {
+        let tokens = tokenize("const x = 1; const y = 2;");
+        let stmts = parse(tokens);
+        assert_eq!(
+            stmts,
+            vec![
+                Statement::ConstDeclaration {
+                    name: "x".to_string(),
+                    type_annotation: None,
+                    init: Expression::Number(1),
+                },
+                Statement::ConstDeclaration {
+                    name: "y".to_string(),
+                    type_annotation: None,
+                    init: Expression::Number(2),
+                },
+            ]
         );
     }
 }
