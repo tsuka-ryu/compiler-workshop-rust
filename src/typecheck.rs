@@ -18,6 +18,24 @@ enum DbEntry {
     },
 }
 
+#[derive(Debug, Clone)]
+struct TypeScheme {
+    /// 量化された型変数（forall に相当）
+    vars: Vec<TypeId>,
+    /// 型本体
+    body: TypeId,
+}
+
+impl TypeScheme {
+    /// 多相でない（普通の）型をスキームとして包む
+    fn monomorphic(body: TypeId) -> Self {
+        Self {
+            vars: Vec::new(),
+            body,
+        }
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub struct TypeError {
     pub message: String,
@@ -25,7 +43,7 @@ pub struct TypeError {
 
 struct TypeChecker {
     db: Vec<DbEntry>,
-    scope: HashMap<String, TypeId>,
+    scope: HashMap<String, TypeScheme>, // ← TypeId から TypeScheme へ
     errors: Vec<TypeError>,
 }
 
@@ -154,7 +172,8 @@ impl TypeChecker {
         match stmt {
             Statement::ConstDeclaration { name, init, .. } => {
                 let init_type = self.visit_expression(init);
-                self.scope.insert(name.clone(), init_type);
+                self.scope
+                    .insert(name.clone(), TypeScheme::monomorphic(init_type));
                 init_type
             }
             Statement::Return { argument } => match argument {
@@ -172,8 +191,8 @@ impl TypeChecker {
 
             Expression::Identifier(name) => {
                 // スコープにあればそれ、なければ fresh var（NamingErrorとは別として処理）
-                if let Some(&id) = self.scope.get(name) {
-                    id
+                if let Some(scheme) = self.scope.get(name).cloned() {
+                    self.instantiate(&scheme)
                 } else {
                     self.fresh_var()
                 }
@@ -305,7 +324,8 @@ impl TypeChecker {
                 let mut param_types = Vec::new();
                 for param in params {
                     let param_type = self.fresh_var();
-                    self.scope.insert(param.name.clone(), param_type);
+                    self.scope
+                        .insert(param.name.clone(), TypeScheme::monomorphic(param_type));
                     param_types.push(param_type);
                 }
 
@@ -358,6 +378,78 @@ impl TypeChecker {
                 self.visit_expression(index);
                 self.fresh_var() // 要素型は不明
             }
+        }
+    }
+
+    /// スキームを TypeId に展開する（Phase 2 Step 9 で本実装）
+    fn instantiate(&mut self, scheme: &TypeScheme) -> TypeId {
+        if scheme.vars.is_empty() {
+            return scheme.body;
+        }
+        // TODO: ちゃんと量化変数を fresh var に置換する
+        scheme.body
+    }
+
+    /// 型に含まれる Var の TypeId をすべて集める
+    /// 結果は out に追加（呼び出し側が用意した HashSet を渡す）
+    /// 自由変数（free variable) -> 「自由」とは「まだ束縛されていない」の意
+    /// T → T   ← この T は「自由」（量化されてない）
+    /// ∀T. T → T   ← この T は「束縛」されてる（∀ で量化されてる）
+    fn free_vars(&mut self, id: TypeId, out: &mut std::collections::HashSet<TypeId>) {
+        let id = self.resolve(id);
+        match self.db[id].clone() {
+            DbEntry::Var => {
+                out.insert(id);
+            }
+            DbEntry::Concrete(_) => {}
+            DbEntry::Function {
+                params,
+                return_type,
+            } => {
+                for p in &params {
+                    self.free_vars(*p, out);
+                }
+                self.free_vars(return_type, out);
+            }
+            DbEntry::Symlink(_) => unreachable!("resolve should collapse Symlinks"),
+        }
+    }
+
+    /// 現在のスコープ全体に含まれる自由型変数を集める
+    fn env_free_vars(&mut self) -> std::collections::HashSet<TypeId> {
+        let mut out = std::collections::HashSet::new();
+        // scope を clone して借用衝突を回避
+        let schemes: Vec<TypeScheme> = self.scope.values().cloned().collect();
+        for scheme in schemes {
+            let mut body_vars = std::collections::HashSet::new();
+            self.free_vars(scheme.body, &mut body_vars);
+            // body にあるけど vars に量化されてないやつを取る
+            for v in body_vars {
+                if !scheme.vars.contains(&v) {
+                    out.insert(v);
+                }
+            }
+        }
+        out
+    }
+
+    /// 型をスキームとして一般化する
+    /// `free_vars(t) - env_free_vars()` を量化変数とする
+    fn generalize(&mut self, t: TypeId) -> TypeScheme {
+        let mut t_vars = std::collections::HashSet::new();
+        self.free_vars(t, &mut t_vars);
+
+        let env_vars = self.env_free_vars();
+
+        // 型に出てくる Var のうち、環境に出てこないものだけ量化
+        let quantified: Vec<TypeId> = t_vars
+            .into_iter()
+            .filter(|v| !env_vars.contains(v))
+            .collect();
+
+        TypeScheme {
+            vars: quantified,
+            body: t,
         }
     }
 }
@@ -586,5 +678,80 @@ mod tests {
     fn type_check_call_chain() {
         let stmts = crate::compile("const inc = (x) => { return x + 1; }; const r = inc(inc(5));");
         assert_eq!(type_check(&stmts), vec![]);
+    }
+
+    #[test]
+    fn free_vars_concrete() {
+        let mut tc = TypeChecker::new();
+        let n = tc.concrete("Number");
+        let mut set = std::collections::HashSet::new();
+        tc.free_vars(n, &mut set);
+        assert!(set.is_empty());
+    }
+
+    #[test]
+    fn free_vars_single_var() {
+        let mut tc = TypeChecker::new();
+        let v = tc.fresh_var();
+        let mut set = std::collections::HashSet::new();
+        tc.free_vars(v, &mut set);
+        assert_eq!(set.len(), 1);
+        assert!(set.contains(&v));
+    }
+
+    #[test]
+    fn free_vars_function() {
+        let mut tc = TypeChecker::new();
+        let t = tc.fresh_var();
+        let u = tc.fresh_var();
+        let n = tc.concrete("Number");
+        // (T, Number) → U
+        let f_id = tc.db.len();
+        tc.db.push(DbEntry::Function {
+            params: vec![t, n],
+            return_type: u,
+        });
+        let mut set = std::collections::HashSet::new();
+        tc.free_vars(f_id, &mut set);
+        assert_eq!(set.len(), 2);
+        assert!(set.contains(&t));
+        assert!(set.contains(&u));
+    }
+    #[test]
+    fn generalize_concrete_stays_monomorphic() {
+        let mut tc = TypeChecker::new();
+        let n = tc.concrete("Number");
+        let scheme = tc.generalize(n);
+        assert!(scheme.vars.is_empty());
+        assert_eq!(scheme.body, n);
+    }
+
+    #[test]
+    fn generalize_var_becomes_quantified() {
+        let mut tc = TypeChecker::new();
+        let v = tc.fresh_var();
+        let scheme = tc.generalize(v);
+        assert_eq!(scheme.vars, vec![v]);
+    }
+
+    #[test]
+    fn generalize_skips_env_vars() {
+        let mut tc = TypeChecker::new();
+        // 環境に Var が1つ
+        let outer = tc.fresh_var();
+        tc.scope
+            .insert("outer".to_string(), TypeScheme::monomorphic(outer));
+
+        // 新しい関数型 (T) → outer を作って generalize
+        let t = tc.fresh_var();
+        let f_id = tc.db.len();
+        tc.db.push(DbEntry::Function {
+            params: vec![t],
+            return_type: outer,
+        });
+        let scheme = tc.generalize(f_id);
+        // outer は環境にあるので量化されない、T は量化される
+        assert!(scheme.vars.contains(&t));
+        assert!(!scheme.vars.contains(&outer));
     }
 }
