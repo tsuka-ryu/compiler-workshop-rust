@@ -298,22 +298,33 @@ impl TypeChecker {
             }
 
             Expression::ArrowFunction { params, body, .. } => {
-                // body を訪問（最後の文の型を取る）
+                // 関数を抜けたらスコープを元に戻すために保存
+                let saved_scope = self.scope.clone();
+
+                // 各 param に fresh varを割り当てて、スコープに登録
+                let mut param_types = Vec::new();
+                for param in params {
+                    let param_type = self.fresh_var();
+                    self.scope.insert(param.name.clone(), param_type);
+                    param_types.push(param_type);
+                }
+
+                // body を訪問（最後の文の型を関数の戻り値型とする）
                 let mut body_type = self.concrete("Void");
                 for stmt in body {
                     body_type = self.visit_statement(stmt);
                 }
-                let _ = body_type; // 本格的にやるなら return_type と unify する
 
-                // 各 param には fresh var を割り当てる
-                // （現在のスコープに登録もする：JS版は雑だが丁寧にやってもいい）
-                for param in params {
-                    let param_type = self.fresh_var();
-                    self.scope.insert(param.name.clone(), param_type);
-                }
+                // スコープを復元（paramがスコープから消える）
+                self.scope = saved_scope;
 
-                // 関数全体の型として fresh var を1つ返す
-                self.fresh_var()
+                // 関数型のエントリを作って返す
+                let function_id = self.db.len();
+                self.db.push(DbEntry::Function {
+                    params: param_types,
+                    return_type: body_type,
+                });
+                function_id
             }
 
             Expression::Call { callee, arguments } => {
