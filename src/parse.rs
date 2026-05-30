@@ -86,6 +86,26 @@ impl Parser {
         matches!(self.peek(), Token::EoF)
     }
 
+    fn looks_like_arrow_fn(&self) -> bool {
+        // ( はすでに消費積み、現在は ( の次
+        let mut depth = 1;
+        let mut i = self.pos;
+        while i < self.tokens.len() {
+            match &self.tokens[i] {
+                Token::LParen => depth += 1,
+                Token::RParen => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return matches!(self.tokens.get(i + 1), Some(Token::Arrow));
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        false
+    }
+
     fn parse_statement(&mut self) -> Statement {
         match self.peek() {
             Token::Const => self.parse_const_declaration(),
@@ -198,6 +218,18 @@ impl Parser {
             Token::Boolean(b) => Expression::Boolean(b),
             Token::Ident(name) => Expression::Identifier(name),
             Token::LBracket => self.parse_array(),
+            Token::LParen => {
+                if self.looks_like_arrow_fn() {
+                    self.parse_arrow_function()
+                } else {
+                    let expr = self.parse_expression();
+                    match self.advance() {
+                        Token::RParen => {}
+                        other => panic!("Expected ')', got {other:?}"),
+                    }
+                    expr
+                }
+            }
             other => panic!("Unexpected token in expression: {other:?}"),
         };
 
@@ -290,6 +322,65 @@ impl Parser {
         }
 
         Expression::Array(elements)
+    }
+
+    fn parse_arrow_function(&mut self) -> Expression {
+        // ( は消費積み
+
+        let mut params = Vec::new();
+
+        if !matches!(self.peek(), Token::RParen) {
+            loop {
+                let name = match self.advance() {
+                    Token::Ident(s) => s,
+                    other => panic!("Expected param name, got {other:?}"),
+                };
+                params.push(Parameter {
+                    name,
+                    type_annotation: None,
+                });
+
+                match self.peek() {
+                    Token::Comma => {
+                        self.advance();
+                    }
+                    _ => break,
+                }
+            }
+        }
+
+        // ) を消費
+        match self.advance() {
+            Token::RParen => {}
+            other => panic!("Expected ')', got {other:?}"),
+        }
+
+        // => を消費
+        match self.advance() {
+            Token::Arrow => {}
+            other => panic!("Expected '=>', got {other:?}"),
+        }
+
+        // { を消費
+        match self.advance() {
+            Token::LCurly => {}
+            other => panic!("Expected '{{', got {other:?}"),
+        }
+
+        // 本体の文を読む
+        let mut body = Vec::new();
+        while !matches!(self.peek(), Token::RCurly) {
+            body.push(self.parse_statement());
+        }
+
+        // } を消費
+        self.advance();
+
+        Expression::ArrowFunction {
+            params,
+            return_type: None,
+            body,
+        }
     }
 }
 
@@ -633,6 +724,43 @@ mod tests {
         let stmts = parse(tokens);
         if let Statement::ConstDeclaration { init, .. } = &stmts[0] {
             assert!(matches!(init, Expression::Call { .. }));
+        }
+    }
+
+    #[test]
+    fn parse_arrow_no_params() {
+        let tokens = tokenize("const f = () => { return 1; };");
+        let stmts = parse(tokens);
+        if let Statement::ConstDeclaration { init, .. } = &stmts[0] {
+            if let Expression::ArrowFunction { params, body, .. } = init {
+                assert_eq!(params.len(), 0);
+                assert_eq!(body.len(), 1);
+            } else {
+                panic!("expected ArrowFunction");
+            }
+        }
+    }
+
+    #[test]
+    fn parse_arrow_with_params() {
+        let tokens = tokenize("const add = (a, b) => { return a + b; };");
+        let stmts = parse(tokens);
+        if let Statement::ConstDeclaration { init, .. } = &stmts[0] {
+            if let Expression::ArrowFunction { params, .. } = init {
+                assert_eq!(params.len(), 2);
+                assert_eq!(params[0].name, "a");
+                assert_eq!(params[1].name, "b");
+            }
+        }
+    }
+
+    #[test]
+    fn parse_paren_expression() {
+        // ( がアロー関数じゃない場合は括弧式
+        let tokens = tokenize("const x = (1 + 2);");
+        let stmts = parse(tokens);
+        if let Statement::ConstDeclaration { init, .. } = &stmts[0] {
+            assert!(matches!(init, Expression::Binary { .. }));
         }
     }
 }
