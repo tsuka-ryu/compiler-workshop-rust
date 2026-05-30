@@ -11,6 +11,11 @@ enum DbEntry {
     Concrete(String),
     /// 別の TypeId への symlink（unionfind 的）
     Symlink(TypeId),
+    /// 関数型 (params) -> return_type
+    Function {
+        params: Vec<TypeId>,
+        return_type: TypeId,
+    },
 }
 
 #[derive(Debug, PartialEq)]
@@ -73,7 +78,6 @@ impl TypeChecker {
     }
 
     /// 2つの TypeId を「同じ型」として統合する
-    /// 成功なら true、矛盾するなら false（エラー報告は呼び出し側でやってもいいし、ここでやってもよい）
     fn unify(&mut self, a: TypeId, b: TypeId) -> bool {
         let a = self.resolve(a);
         let b = self.resolve(b);
@@ -84,7 +88,16 @@ impl TypeChecker {
         }
 
         match (self.db[a].clone(), self.db[b].clone()) {
-            // 両方 Concrete -> 名前が同じならOK、違ったら不一致
+            // Var が絡む → Var を Symlink にする（先に処理）
+            (DbEntry::Var, _) => {
+                self.db[a] = DbEntry::Symlink(b);
+                true
+            }
+            (_, DbEntry::Var) => {
+                self.db[b] = DbEntry::Symlink(a);
+                true
+            }
+            // Concrete 同士
             (DbEntry::Concrete(name_a), DbEntry::Concrete(name_b)) => {
                 if name_a == name_b {
                     true
@@ -95,19 +108,45 @@ impl TypeChecker {
                     false
                 }
             }
-
-            // 片方がVar -> Varの方を相手にSymlinkで繋ぐ
-            (DbEntry::Var, _) => {
-                self.db[a] = DbEntry::Symlink(b);
-                true
+            // Function 同士 → arity 確認 + 再帰的 unify
+            (
+                DbEntry::Function {
+                    params: pa,
+                    return_type: ra,
+                },
+                DbEntry::Function {
+                    params: pb,
+                    return_type: rb,
+                },
+            ) => {
+                if pa.len() != pb.len() {
+                    self.report(format!(
+                        "Function arity mismatch: expected {} args, got {}",
+                        pa.len(),
+                        pb.len()
+                    ));
+                    return false;
+                }
+                let mut ok = true;
+                for (x, y) in pa.iter().zip(pb.iter()) {
+                    if !self.unify(*x, *y) {
+                        ok = false;
+                    }
+                }
+                if !self.unify(ra, rb) {
+                    ok = false;
+                }
+                ok
             }
-            (_, DbEntry::Var) => {
-                self.db[b] = DbEntry::Symlink(a);
-                true
+
+            // Function と Concrete の組み合わせ → 不一致
+            (DbEntry::Function { .. }, DbEntry::Concrete(name))
+            | (DbEntry::Concrete(name), DbEntry::Function { .. }) => {
+                self.report(format!("Type mismatch: cannot unify function with {name}"));
+                false
             }
 
-            // resolve済みなのでSymlinkは出ない、ここには来ないはず
-            _ => unreachable!("resolve should have collapsed all Symlinks"),
+            _ => unreachable!("resolve should collapse Symlinks"),
         }
     }
 
