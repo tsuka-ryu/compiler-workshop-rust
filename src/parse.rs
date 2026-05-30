@@ -177,8 +177,52 @@ impl Parser {
             Token::Number(n) => Expression::Number(n),
             Token::StringLit(s) => Expression::String(s),
             Token::Boolean(b) => Expression::Boolean(b),
-            Token::Ident(name) => Expression::Identifier(name),
+            Token::Ident(name) => {
+                let callee = Expression::Identifier(name);
+                if matches!(self.peek(), Token::LParen) {
+                    self.parse_call(callee)
+                } else {
+                    callee
+                }
+            }
             other => panic!("Unexpected token in expression: {other:?}"),
+        }
+    }
+
+    fn parse_call(&mut self, callee: Expression) -> Expression {
+        self.advance(); // ( を消費
+
+        let mut arguments = Vec::new();
+
+        // 空引数 ()
+        if matches!(self.peek(), Token::RParen) {
+            self.advance();
+            return Expression::Call {
+                callee: Box::new(callee),
+                arguments,
+            };
+        }
+
+        // 引数を1個以上 + カンマ区切り
+        loop {
+            arguments.push(self.parse_expression());
+            match self.peek() {
+                Token::Comma => {
+                    self.advance();
+                }
+                _ => break,
+            }
+        }
+
+        // ) を期待
+        match self.advance() {
+            Token::RParen => {}
+            other => panic!("Expected ')', got {other:?}"),
+        }
+
+        Expression::Call {
+            callee: Box::new(callee),
+            arguments,
         }
     }
 
@@ -398,6 +442,51 @@ mod tests {
                 assert!(matches!(**alternate, Expression::Conditional { .. }));
             } else {
                 panic!("expected Conditional");
+            }
+        }
+    }
+
+    #[test]
+    fn parse_call_no_args() {
+        let tokens = tokenize("const x = f();");
+        let stmts = parse(tokens);
+        assert_eq!(
+            stmts,
+            vec![Statement::ConstDeclaration {
+                name: "x".to_string(),
+                type_annotation: None,
+                init: Expression::Call {
+                    callee: Box::new(Expression::Identifier("f".to_string())),
+                    arguments: vec![],
+                },
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_call_with_args() {
+        let tokens = tokenize("const x = add(1, 2);");
+        let stmts = parse(tokens);
+        assert_eq!(
+            stmts,
+            vec![Statement::ConstDeclaration {
+                name: "x".to_string(),
+                type_annotation: None,
+                init: Expression::Call {
+                    callee: Box::new(Expression::Identifier("add".to_string())),
+                    arguments: vec![Expression::Number(1), Expression::Number(2)],
+                },
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_call_nested() {
+        let tokens = tokenize("const x = f(g(1));");
+        let stmts = parse(tokens);
+        if let Statement::ConstDeclaration { init, .. } = &stmts[0] {
+            if let Expression::Call { arguments, .. } = init {
+                assert!(matches!(arguments[0], Expression::Call { .. }));
             }
         }
     }
