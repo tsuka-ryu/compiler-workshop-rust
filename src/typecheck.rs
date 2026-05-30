@@ -328,24 +328,27 @@ impl TypeChecker {
             }
 
             Expression::Call { callee, arguments } => {
+                // callee の型を取得
                 let callee_type = self.visit_expression(callee);
-                let _ = callee_type;
 
+                // 各引数の型を取得
+                let arg_types: Vec<TypeId> = arguments
+                    .iter()
+                    .map(|arg| self.visit_expression(arg))
+                    .collect();
+
+                // 戻り値の型（未知なので fresh var）
                 let return_type = self.fresh_var();
 
-                if !arguments.is_empty() {
-                    let arg_types: Vec<TypeId> = arguments
-                        .iter()
-                        .map(|arg| self.visit_expression(arg))
-                        .collect();
+                // 「期待される関数型」を作る: (arg_types) → return_type
+                let expected_id = self.db.len();
+                self.db.push(DbEntry::Function {
+                    params: arg_types,
+                    return_type,
+                });
 
-                    // JS版の特殊処理：単一引数の場合、戻り値型 = 引数型と仮定（恒等関数想定）
-                    if let Expression::Identifier(name) = callee.as_ref() {
-                        if self.scope.contains_key(name) && arguments.len() == 1 {
-                            self.unify(return_type, arg_types[0]);
-                        }
-                    }
-                }
+                // callee の実際の型と期待型を unify
+                self.unify(callee_type, expected_id);
 
                 return_type
             }
@@ -556,6 +559,32 @@ mod tests {
     #[test]
     fn type_check_call_in_expression() {
         let stmts = crate::compile("const f = (x) => { return x; }; const r = f(1) + 2;");
+        assert_eq!(type_check(&stmts), vec![]);
+    }
+
+    #[test]
+    fn type_check_call_with_correct_arity() {
+        let stmts = crate::compile("const add = (a, b) => { return a + b; }; const r = add(1, 2);");
+        assert_eq!(type_check(&stmts), vec![]);
+    }
+
+    #[test]
+    fn type_check_call_with_wrong_arity() {
+        let stmts = crate::compile("const f = (x) => { return x; }; const r = f(1, 2);");
+        let errors = type_check(&stmts);
+        assert!(errors.iter().any(|e| e.message.contains("arity")));
+    }
+
+    #[test]
+    fn type_check_call_with_wrong_arg_type() {
+        let stmts = crate::compile("const inc = (x) => { return x * 2; }; const r = inc(\"hi\");");
+        let errors = type_check(&stmts);
+        assert!(!errors.is_empty());
+    }
+
+    #[test]
+    fn type_check_call_chain() {
+        let stmts = crate::compile("const inc = (x) => { return x + 1; }; const r = inc(inc(5));");
         assert_eq!(type_check(&stmts), vec![]);
     }
 }
