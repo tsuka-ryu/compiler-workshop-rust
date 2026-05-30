@@ -125,6 +125,25 @@ impl Parser {
         }
     }
 
+    fn parse_return_statement(&mut self) -> Statement {
+        // return
+        self.advance();
+
+        // 引数は省略可能。次が ; か } EoFなら省略
+        let argument = if matches!(self.peek(), Token::Semicolon | Token::RCurly | Token::EoF) {
+            None
+        } else {
+            Some(self.parse_expression())
+        };
+
+        // 末尾の ; があれば消費
+        if matches!(self.peek(), Token::Semicolon) {
+            self.advance();
+        }
+
+        Statement::Return { argument }
+    }
+
     fn parse_expression(&mut self) -> Expression {
         let test = self.parse_binary();
 
@@ -185,6 +204,7 @@ impl Parser {
                     callee
                 }
             }
+            Token::LBracket => self.parse_array(),
             other => panic!("Unexpected token in expression: {other:?}"),
         }
     }
@@ -226,23 +246,33 @@ impl Parser {
         }
     }
 
-    fn parse_return_statement(&mut self) -> Statement {
-        // return
-        self.advance();
+    fn parse_array(&mut self) -> Expression {
+        // [ はすでに advance済み
 
-        // 引数は省略可能。次が ; か } EoFなら省略
-        let argument = if matches!(self.peek(), Token::Semicolon | Token::RCurly | Token::EoF) {
-            None
-        } else {
-            Some(self.parse_expression())
-        };
+        let mut elements = Vec::new();
 
-        // 末尾の ; があれば消費
-        if matches!(self.peek(), Token::Semicolon) {
+        // 空配列 []
+        if matches!(self.peek(), Token::RBracket) {
             self.advance();
+            return Expression::Array(elements);
         }
 
-        Statement::Return { argument }
+        loop {
+            elements.push(self.parse_expression());
+            match self.peek() {
+                Token::Comma => {
+                    self.advance();
+                }
+                _ => break,
+            }
+        }
+
+        match self.advance() {
+            Token::RBracket => {}
+            other => panic!("Expected ']', got {other:?}"),
+        }
+
+        Expression::Array(elements)
     }
 }
 
@@ -488,6 +518,54 @@ mod tests {
             if let Expression::Call { arguments, .. } = init {
                 assert!(matches!(arguments[0], Expression::Call { .. }));
             }
+        }
+    }
+
+    #[test]
+    fn parse_array_empty() {
+        let tokens = tokenize("const x = [];");
+        let stmts = parse(tokens);
+        assert_eq!(
+            stmts,
+            vec![Statement::ConstDeclaration {
+                name: "x".to_string(),
+                type_annotation: None,
+                init: Expression::Array(vec![]),
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_array_numbers() {
+        let tokens = tokenize("const x = [1, 2, 3];");
+        let stmts = parse(tokens);
+        assert_eq!(
+            stmts,
+            vec![Statement::ConstDeclaration {
+                name: "x".to_string(),
+                type_annotation: None,
+                init: Expression::Array(vec![
+                    Expression::Number(1),
+                    Expression::Number(2),
+                    Expression::Number(3),
+                ]),
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_array_mixed() {
+        let tokens = tokenize(r#"const x = [1, "two", true];"#);
+        let stmts = parse(tokens);
+        if let Statement::ConstDeclaration {
+            init: Expression::Array(items),
+            ..
+        } = &stmts[0]
+        {
+            assert_eq!(items.len(), 3);
+            assert!(matches!(items[0], Expression::Number(1)));
+            assert!(matches!(items[1], Expression::String(_)));
+            assert!(matches!(items[2], Expression::Boolean(true)));
         }
     }
 }
