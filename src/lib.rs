@@ -4,6 +4,7 @@ pub mod naming;
 pub mod parse;
 pub mod tokenize;
 pub mod typecheck;
+pub mod wasm;
 
 pub struct CompileResult {
     pub statements: Vec<parse::Statement>,
