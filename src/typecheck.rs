@@ -1,5 +1,5 @@
-use crate::parse::Statement;
-use std::collections::HashMap;
+use crate::parse::{BinaryOp, Expression, Statement};
+use std::{collections::HashMap, fmt::Binary};
 
 pub type TypeId = usize;
 
@@ -110,12 +110,100 @@ impl TypeChecker {
             _ => unreachable!("resolve should have collapsed all Symlinks"),
         }
     }
+
+    fn visit_statement(&mut self, stmt: &Statement) -> TypeId {
+        match stmt {
+            Statement::ConstDeclaration { name, init, .. } => {
+                let init_type = self.visit_expression(init);
+                self.scope.insert(name.clone(), init_type);
+                init_type
+            }
+            Statement::Return { argument } => match argument {
+                Some(expr) => self.visit_expression(expr),
+                None => self.concrete("Void"),
+            },
+        }
+    }
+
+    fn visit_expression(&mut self, expr: &Expression) -> TypeId {
+        match expr {
+            Expression::Number(_) => self.concrete("Number"),
+            Expression::String(_) => self.concrete("String"),
+            Expression::Boolean(_) => self.concrete("Boolean"),
+
+            Expression::Identifier(name) => {
+                // スコープにあればそれ、なければ fresh var（NamingErrorとは別として処理）
+                if let Some(&id) = self.scope.get(name) {
+                    id
+                } else {
+                    self.fresh_var()
+                }
+            }
+
+            Expression::Binary { left, op, right } => {
+                let left_type = self.visit_expression(left);
+                let right_type = self.visit_expression(right);
+
+                match op {
+                    BinaryOp::Add => {
+                        // 左右が同じ型であるべき
+                        let left_concrete = self.concrete_name(left_type);
+                        let right_concrete = self.concrete_name(right_type);
+
+                        if let (Some(l), Some(r)) = (&left_concrete, &right_concrete) {
+                            if l != r {
+                                self.report(format!(
+                                    "Type mismatch in binary operation: cannot add {l} to {r}"
+                                ));
+                                return self.concrete("Number");
+                            }
+                        }
+
+                        self.unify(left_type, right_type);
+                        left_type
+                    }
+                    BinaryOp::Multiply => {
+                        // 左右が Number であるべき
+                        let number = self.concrete("Number");
+
+                        let left_concrete = self.concrete_name(left_type);
+                        if let Some(name) = &left_concrete {
+                            if name != "Number" {
+                                self.report(format!(
+                        "Type mismatch: expected Number for left operand of '*' operator, got {name}"
+                    ));
+                            }
+                        } else {
+                            self.unify(left_type, number);
+                        }
+
+                        let right_concrete = self.concrete_name(right_type);
+                        if let Some(name) = &right_concrete {
+                            if name != "Number" {
+                                self.report(format!(
+                        "Type mismatch: expected Number for right operand of '*' operator, got {name}"
+                    ));
+                            }
+                        } else {
+                            self.unify(right_type, number);
+                        }
+
+                        number
+                    }
+                }
+            }
+
+            _ => self.fresh_var(), // TODO: 後で実装
+        }
+    }
 }
 
 pub fn type_check(statements: &[Statement]) -> Vec<TypeError> {
-    let checker = TypeChecker::new();
-    let _ = (checker, statements);
-    todo!()
+    let mut checker = TypeChecker::new();
+    for stmt in statements {
+        checker.visit_statement(stmt);
+    }
+    checker.errors
 }
 
 #[cfg(test)]
@@ -167,5 +255,67 @@ mod tests {
         let mut tc = TypeChecker::new();
         let a = tc.concrete("Number");
         assert!(tc.unify(a, a));
+    }
+
+    #[test]
+    fn type_check_simple_const() {
+        let stmts = crate::compile("const x = 5;");
+        assert_eq!(type_check(&stmts), vec![]);
+    }
+
+    #[test]
+    fn type_check_string_const() {
+        let stmts = crate::compile(r#"const msg = "hello";"#);
+        assert_eq!(type_check(&stmts), vec![]);
+    }
+
+    #[test]
+    fn type_check_return_with_value() {
+        // return 文単独はパースできないので、関数内で確認するのは Step 6 以降に回す
+        // ここでは型がエラーなく走ることだけ確認
+        let stmts = crate::compile("const x = 1;");
+        assert_eq!(type_check(&stmts), vec![]);
+    }
+
+    #[test]
+    fn type_check_add_numbers() {
+        let stmts = crate::compile("const x = 1 + 2;");
+        assert_eq!(type_check(&stmts), vec![]);
+    }
+
+    #[test]
+    fn type_check_add_strings() {
+        let stmts = crate::compile(r#"const x = "a" + "b";"#);
+        assert_eq!(type_check(&stmts), vec![]);
+    }
+
+    #[test]
+    fn type_check_add_mismatched() {
+        let stmts = crate::compile(r#"const x = 1 + "hi";"#);
+        let errors = type_check(&stmts);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].message.contains("Number"));
+        assert!(errors[0].message.contains("String"));
+    }
+
+    #[test]
+    fn type_check_multiply_numbers() {
+        let stmts = crate::compile("const x = 2 * 3;");
+        assert_eq!(type_check(&stmts), vec![]);
+    }
+
+    #[test]
+    fn type_check_multiply_string_fails() {
+        let stmts = crate::compile(r#"const x = "a" * 2;"#);
+        let errors = type_check(&stmts);
+        assert!(!errors.is_empty());
+        assert!(errors.iter().any(|e| e.message.contains("Number")));
+    }
+
+    #[test]
+    fn type_check_chain() {
+        // 1 + 2 + 3 → 全部 Number、エラーなし
+        let stmts = crate::compile("const x = 1 + 2 + 3;");
+        assert_eq!(type_check(&stmts), vec![]);
     }
 }
