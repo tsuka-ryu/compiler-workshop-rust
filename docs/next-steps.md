@@ -18,15 +18,19 @@
 
 1. **Span / 位置情報** — 全ての後段の前提
 2. **Result ベースのエラー処理** — panic を排除
-3. **codespan-reporting でエラー整形** — 1〜3 で診断基盤が揃う
-4. **Visit / Traverse パターン** — Linter / Formatter / Transformer の前提
-5. **Pratt parser** — 同じ AST を別方式で構築
-6. **Resilient parsing** — 壊れたコードでも木を作る
-7. **Arena allocator (実装ブランチ)** — `Box<T>` → `&'a T` への変換を体験
-8. **Index 型 (NodeId / SymbolId / ScopeId)** — naming を index ベースに refactor
-9. **Linter** — visit パターンの実応用
-10. **Formatter (浅め)** — pretty-printer の基本だけ
-11. **LSP (Phase 1 まで)** — JSON-RPC の往復が分かれば十分
+3. **codespan-reporting でエラー整形** — 診断基盤が揃う
+4. **Snapshot testing (insta)** — parser を分岐する前にテスト基盤を作る
+5. **Visit / Traverse パターン** — Linter / Formatter / Transformer の前提
+6. **Pratt parser** — 同じ AST を別方式で構築
+7. **Resilient parsing** — 壊れたコードでも木を作る
+8. **Arena allocator (実装ブランチ)** — `Box<T>` → `&'a T` への変換を体験
+9. **String interning (`Atom<'a>`)** — Arena 上に identifier を集約
+10. **Index 型 (NodeId / SymbolId / ScopeId)** — naming を index ベースに refactor
+11. **Linter** — visit パターンの実応用
+12. **Transformer** — `VisitMut` ベースの汎用書き換え
+13. **Formatter (浅め)** — pretty-printer の基本だけ
+14. **LSP (Phase 1 まで)** — JSON-RPC の往復が分かれば十分
+15. **Cargo workspace 分割** — 仕上げに crate 分割でモジュール境界を見直す
 
 ### 参考: oxc の主要 crate との対応
 
@@ -34,14 +38,18 @@
 |---|---|
 | `oxc_span` | (1) Span |
 | `oxc_diagnostics` (miette) | (2)(3) Result + codespan-reporting |
-| `oxc_ast_visit` / `oxc_traverse` | (4) Visit/Traverse |
-| `oxc_parser` (expression は precedence climbing) | (5) Pratt |
-| `oxc_parser` (壊れたコード対応) | (6) Resilient |
-| `oxc_allocator` (bumpalo) + `&'a` AST | (7) Arena |
-| `oxc_semantic` (scope / symbol / reference の id 管理) | (8) Index 型 |
-| `oxc_linter` | (9) Linter |
-| `oxc_formatter` | (10) Formatter |
-| `oxc_language_server` | (11) LSP |
+| (テスト基盤、oxc も内部で利用) | (4) Snapshot testing (insta) |
+| `oxc_ast_visit` / `oxc_traverse` | (5) Visit/Traverse |
+| `oxc_parser` (expression は precedence climbing) | (6) Pratt |
+| `oxc_parser` (壊れたコード対応) | (7) Resilient |
+| `oxc_allocator` (bumpalo) + `&'a` AST | (8) Arena |
+| `oxc_span::Atom` | (9) String interning |
+| `oxc_semantic` (scope / symbol / reference の id 管理) | (10) Index 型 |
+| `oxc_linter` | (11) Linter |
+| `oxc_transformer` | (12) Transformer |
+| `oxc_formatter` | (13) Formatter |
+| `oxc_language_server` | (14) LSP |
+| oxc workspace の crate 分割 | (15) workspace 化 |
 
 ---
 
@@ -147,7 +155,42 @@ error: expected ';'
 
 ---
 
-## 4. Visit / Traverse パターン
+## 4. Snapshot testing (insta)
+
+新規依存: `insta` (dev-dependencies)。新規ファイル: `tests/parse_snapshots.rs`
+
+ねらい: parser を分岐 (Pratt / Resilient / Arena) させる前にスナップショットテスト基盤を入れておく。AST のリテラルを `assert_eq!` で書き続けると、節 5 以降で破綻する。oxc / swc / rust-analyzer など実用 parser はこのスタイル。
+
+### 最初のステップ
+
+1. `Cargo.toml` に `[dev-dependencies] insta = "1"` を追加
+2. `tests/parse_snapshots.rs` を作る
+   ```rust
+   #[test]
+   fn snapshot_const_decl() {
+       let stmts = parse(tokenize("const x = 1 + 2;"));
+       insta::assert_debug_snapshot!(stmts);
+   }
+   ```
+3. 初回実行で `.snap.new` が生成されるので `cargo insta review` で承認
+4. 既存テストの「AST 構造をリテラルで書いてる箇所」を順次置き換え
+5. Pratt / Resilient 版が出てきたら、同じ入力 → 同じ snapshot で同値性を確認
+
+### 学習ポイント
+
+- 「期待値をコードに書く」から「期待値をファイルに固定する」への発想転換
+- `cargo insta review` の TUI 運用
+- AST 構造を変えたときに何個の snapshot が壊れるかで影響範囲が可視化される
+- 複数 parser 実装の同値性チェックに使う発想
+
+### 読書 TODO
+
+- [ ] [insta README](https://github.com/mitsuhiko/insta)
+- [ ] oxc のテストでどう `insta` が使われているか観察 ([例: oxc_parser/tests](https://github.com/oxc-project/oxc/tree/main/crates/oxc_parser/tests))
+
+---
+
+## 5. Visit / Traverse パターン
 
 新規ファイル: `src/visit.rs`、`src/visit_mut.rs`
 
@@ -187,7 +230,7 @@ error: expected ';'
 
 ---
 
-## 5. Pratt parser
+## 6. Pratt parser
 
 新規ファイル: `src/parse_pratt.rs`
 
@@ -240,7 +283,7 @@ fn parse_expr_bp(&mut self, min_bp: u8) -> Expression {
 
 ---
 
-## 6. Resilient parsing
+## 7. Resilient parsing
 
 新規ファイル: `src/parse_resilient.rs`、`src/ast_resilient.rs` (Error ノードを足した AST を別型として置く)
 
@@ -272,7 +315,7 @@ fn parse_expr_bp(&mut self, min_bp: u8) -> Expression {
 
 ---
 
-## 7. Arena allocator (実装ブランチ)
+## 8. Arena allocator (実装ブランチ)
 
 新規ファイル: `src/ast_arena.rs`、`src/parse_arena.rs`
 
@@ -321,7 +364,50 @@ fn parse_expr_bp(&mut self, min_bp: u8) -> Expression {
 
 ---
 
-## 8. Index 型 (NodeId / SymbolId / ScopeId)
+## 9. String interning (`Atom<'a>`)
+
+新規ファイル: `src/atom.rs`、`src/ast_arena_atom.rs`、`src/parse_arena_atom.rs` (節 8 の arena 版から派生)
+
+ねらい: AST 中の識別子・文字列リテラルを `String` (heap allocation) ではなく **arena 上に確保された `&'a str` を `Atom<'a>` でラップしたもの** に置き換える。oxc / swc の AST に `Atom<'a>` がそこら中に出てくる理由を体感する。
+
+### 前提
+
+- ✅ 節 8 の arena 版が動いている (`'a` ライフタイムが parser 全体に乗っている)
+
+### 最初のステップ
+
+1. `src/atom.rs` に最小実装
+   ```rust
+   #[derive(Clone, Copy, PartialEq, Eq, Hash)]
+   pub struct Atom<'a>(&'a str);
+
+   impl<'a> Atom<'a> {
+       pub fn new_in(bump: &'a Bump, s: &str) -> Self {
+           Atom(bump.alloc_str(s))
+       }
+       pub fn as_str(&self) -> &'a str { self.0 }
+   }
+   ```
+2. `src/ast_arena_atom.rs` で `Identifier(String)` → `Identifier(Atom<'a>)` に置き換え
+3. `src/parse_arena_atom.rs` で tokenize の結果から `Atom::new_in(bump, &lexeme)` を作る
+4. (発展) 同じ識別子で重複 alloc しない interning map を `Bump` の隣に持つ
+5. AST のサイズが小さくなったか `std::mem::size_of` で確認
+
+### 学習ポイント
+
+- `&'a str` を newtype で包んで `Copy` にする発想 (`String` は `Copy` でない)
+- AST 上で `==` が「文字列比較」ではなく「ポインタ比較」に化ける条件 (interning が効いている時)
+- AST ノードサイズの削減 (`String` は 24 bytes, `Atom<'a>` は 16 bytes)
+- arena ベース parser でなぜ識別子型が `Atom<'a>` になっているかの理解
+
+### 読書 TODO
+
+- [ ] [oxc_span::Atom のソース](https://github.com/oxc-project/oxc/blob/main/crates/oxc_span/src/atom.rs)
+- [ ] [swc_atoms](https://github.com/swc-project/swc/tree/main/crates/swc_atoms) — 設計対比 (swc は global interning)
+
+---
+
+## 10. Index 型 (NodeId / SymbolId / ScopeId)
 
 新規ファイル: `src/naming_indexed.rs`
 
@@ -349,7 +435,7 @@ fn parse_expr_bp(&mut self, min_bp: u8) -> Expression {
 
 ---
 
-## 9. Linter
+## 11. Linter
 
 新規ファイル: `src/lint.rs`
 
@@ -382,7 +468,49 @@ fn parse_expr_bp(&mut self, min_bp: u8) -> Expression {
 
 ---
 
-## 10. Formatter (浅め)
+## 12. Transformer
+
+新規ファイル: `src/transform.rs`
+
+ねらい: 節 5 の `VisitMut` と節 10 の index 型を使って、AST → AST の汎用書き換えフレームワークを作る。既存の `monomorphize.rs` は「専用 transformer」だが、こちらは「汎用 transformer」という対比。oxc では [`oxc_transformer`](https://github.com/oxc-project/oxc/tree/main/crates/oxc_transformer) が linter / formatter と並ぶ柱の 1 本。
+
+### 前提
+
+- ✅ 節 5 Visit/Traverse の `VisitMut`
+- (あれば) 節 10 Index 型 (rename 系の変換で symbol table が要る)
+
+### 最初のステップ
+
+1. `Transformer` trait を定義
+   ```rust
+   pub trait Transformer {
+       fn enter_statement(&mut self, _stmt: &mut Statement) {}
+       fn exit_statement(&mut self, _stmt: &mut Statement) {}
+       fn enter_expression(&mut self, _expr: &mut Expression) {}
+       fn exit_expression(&mut self, _expr: &mut Expression) {}
+   }
+   pub fn transform<T: Transformer>(t: &mut T, stmts: &mut [Statement]) { ... }
+   ```
+2. お題 1: **`const` → `let` 変換** (Statement の kind を書き換えるだけ)
+3. お題 2: **定数畳み込み** (`1 + 2` → `3` を `exit_expression` で書き換え)
+4. お題 3: **identifier rename** (節 10 の `SymbolId` で同一 binding を全置換)
+5. 既存 `monomorphize.rs` をこの trait で書き直してみる (リファクタではなく `monomorphize_v2.rs` として並置)
+
+### 学習ポイント
+
+- enter / exit の 2 段フックがあると何が表現できるか (children 走査前後)
+- 「自分自身を別ノードに差し替える」パターン (`*expr = new_expr;`)
+- 複数 transformer を pipeline で繋ぐ発想
+- 専用 (monomorphize) vs 汎用 (Transformer trait) の設計対比
+
+### 読書 TODO
+
+- [ ] [oxc_transformer](https://github.com/oxc-project/oxc/tree/main/crates/oxc_transformer) — Babel 互換の transformer フレームワーク
+- [ ] [swc_ecma_transforms](https://github.com/swc-project/swc/tree/main/crates/swc_ecma_transforms) — 設計対比
+
+---
+
+## 13. Formatter (浅め)
 
 新規ファイル: `src/format.rs`
 
@@ -415,7 +543,7 @@ fn parse_expr_bp(&mut self, min_bp: u8) -> Expression {
 
 ---
 
-## 11. LSP (Phase 1 まで)
+## 14. LSP (Phase 1 まで)
 
 新規ファイル: `src/lsp.rs`
 
@@ -468,6 +596,51 @@ stdin/stdout に JSON-RPC を流すだけ。エディタ統合はやらない。
 
 ---
 
+## 15. Cargo workspace 分割
+
+ねらい: 1〜14 を作り終えた状態で、単一 crate を **Cargo workspace に分割** する。実装ではなく構成の練習。「なぜ分けるのか / 何が公開 API か / 循環依存をどう避けるか」を体感する。
+
+### 並置スタイルとの両立
+
+workspace 化しても各 crate の中で `parse.rs` / `parse_pratt.rs` / `parse_resilient.rs` の並置は維持する。crate 分割は「同じレイヤの実装をまとめる」のが目的で、別実装を消すのが目的ではない。
+
+### 最初のステップ
+
+1. ルート `Cargo.toml` を `[workspace]` に変更
+2. `crates/` ディレクトリを作り、以下のように分割
+   ```
+   crates/
+     span/        ← Span, Atom
+     diagnostics/ ← Result, codespan 変換層
+     ast/         ← AST 型 (本体、span 版、arena 版、resilient 版)
+     parser/      ← tokenize + parse 系全部
+     semantic/    ← naming, naming_indexed
+     visit/       ← Visit / VisitMut
+     typecheck/   ← typecheck, typecheck_mono
+     linter/      ← lint
+     transformer/ ← monomorphize, transform
+     formatter/   ← format
+     wasm/        ← wasm codegen
+     lsp/         ← LSP サーバ
+   ```
+3. 各 crate の `Cargo.toml` で `[dependencies]` を最小限に書く
+4. `workspace.dependencies` で外部依存 (bumpalo, codespan-reporting, etc) を一元管理
+5. 循環依存が出たら設計を疑う (`ast` が `parser` を参照したら逆)
+
+### 学習ポイント
+
+- 「公開 API」と「実装詳細」の境界が物理的に強制される感覚
+- workspace lockfile / build cache の挙動
+- 循環依存をどう避けるか (ast crate を最下層に置く設計)
+- oxc / swc が なぜ 30+ crate に分かれているかの理解
+
+### 読書 TODO
+
+- [ ] [Cargo workspaces](https://doc.rust-lang.org/cargo/reference/workspaces.html)
+- [ ] [oxc workspace の Cargo.toml](https://github.com/oxc-project/oxc/blob/main/Cargo.toml) — 全 crate の俯瞰
+
+---
+
 ## 想定スケジュール (目安)
 
 | タスク | 所要 |
@@ -475,13 +648,17 @@ stdin/stdout に JSON-RPC を流すだけ。エディタ統合はやらない。
 | 1. Span | 半日〜1 日 |
 | 2. Result | 半日 |
 | 3. codespan-reporting | 半日 |
-| 4. Visit/Traverse | 半日 |
-| 5. Pratt parser | 半日〜1 日 |
-| 6. Resilient parsing | 1 日〜数日 |
-| 7. Arena allocator (実装) | 1 日〜数日 (ライフタイム格闘) |
-| 8. Index 型 | 半日〜1 日 |
-| 9. Linter | 半日〜1 日 (ルール数しだい) |
-| 10. Formatter (浅め) | 半日〜1 日 |
-| 11. LSP Phase 1 | 数日 (立ち上げ重め) |
+| 4. Snapshot testing (insta) | 半日 |
+| 5. Visit/Traverse | 半日 |
+| 6. Pratt parser | 半日〜1 日 |
+| 7. Resilient parsing | 1 日〜数日 |
+| 8. Arena allocator (実装) | 1 日〜数日 (ライフタイム格闘) |
+| 9. String interning (Atom) | 半日 |
+| 10. Index 型 | 半日〜1 日 |
+| 11. Linter | 半日〜1 日 (ルール数しだい) |
+| 12. Transformer | 半日〜1 日 |
+| 13. Formatter (浅め) | 半日〜1 日 |
+| 14. LSP Phase 1 | 数日 (立ち上げ重め) |
+| 15. Workspace 分割 | 半日〜1 日 |
 
-全体で 2 週間〜1 ヶ月程度。
+全体で 3 週間〜1.5 ヶ月程度。
