@@ -7,7 +7,7 @@
 //! 単相な AST に書き換える。
 
 use crate::parse::{BinaryOp, Expression, Parameter, Statement, TypeAnnotation};
-use crate::typecheck_mono::{FunctionScheme, Type, type_check_with_info};
+use crate::typecheck_mono::{FunctionScheme, Type, TypeCheckResult, type_check_with_info};
 use std::collections::{HashMap, HashSet};
 
 /// 関数の具体的なシグネチャ。多相関数の各使用ごとに作る。
@@ -23,8 +23,10 @@ pub type Specializations = HashMap<String, HashSet<ConcreteSignature>>;
 /// トップレベルの式から多相関数の呼び出しを集めて、必要な specialization を返す。
 pub fn collect_specializations(statements: &[Statement]) -> Specializations {
     let info = type_check_with_info(statements);
+    let aliases = collect_aliases(statements, &info);
     let mut collector = Collector {
         functions: info.functions,
+        aliases,
         scope: HashMap::new(),
         specs: Specializations::new(),
     };
@@ -40,6 +42,8 @@ pub fn collect_specializations(statements: &[Statement]) -> Specializations {
 struct Collector {
     /// top-level の関数の TypeScheme (typecheck_mono が提供)
     functions: HashMap<String, FunctionScheme>,
+    /// alias map: f2 → id 等
+    aliases: HashMap<String, String>,
     /// 現在のスコープ: 変数名 → 具体型
     scope: HashMap<String, Type>,
     /// 集めた specialization
@@ -133,8 +137,11 @@ impl Collector {
                     return Type::Var(0);
                 };
 
+                // エイリアスチェーンを辿って実体名を得る
+                let resolved = resolve_alias_chain(&self.aliases, fname);
+
                 // 関数情報を取得 (top-level の関数定義)
-                let Some(scheme) = self.functions.get(fname).cloned() else {
+                let Some(scheme) = self.functions.get(&resolved).cloned() else {
                     return Type::Var(0);
                 };
 
@@ -155,9 +162,9 @@ impl Collector {
                         .collect();
                     let concrete_return = apply_subst(&scheme.return_type, &subst);
 
-                    // specialization を記録
+                    // specialization を記録 (実体名で記録)
                     self.specs
-                        .entry(fname.clone())
+                        .entry(resolved.clone())
                         .or_default()
                         .insert(ConcreteSignature {
                             param_types: concrete_params,
@@ -267,6 +274,322 @@ fn type_short_name(t: &Type) -> String {
     match t {
         Type::Concrete(name) => name.clone(),
         _ => "Unknown".to_string(),
+    }
+}
+
+// =============================================================================
+// プログラム全体の単相化 (Phase 11)
+// =============================================================================
+
+/// `const alias = original;` (右辺が Identifier で関数を指す)のエイリアスを集める。
+fn collect_aliases(stmts: &[Statement], info: &TypeCheckResult) -> HashMap<String, String> {
+    let mut aliases = HashMap::new();
+    for stmt in stmts {
+        if let Statement::ConstDeclaration {
+            name,
+            init: Expression::Identifier(target),
+            ..
+        } = stmt
+        {
+            if info.functions.contains_key(target) {
+                aliases.insert(name.clone(), target.clone());
+            }
+        }
+    }
+    aliases
+}
+
+/// エイリアスチェーンを辿って最終的な名前を返す。`f3 → f2 → id` なら "id"。
+fn resolve_alias_chain(aliases: &HashMap<String, String>, name: &str) -> String {
+    let mut current = name.to_string();
+    while let Some(target) = aliases.get(&current) {
+        current = target.clone();
+    }
+    current
+}
+
+/// AST を歩いて Call を specialization 済みの名前に書き換える。
+struct Rewriter {
+    functions: HashMap<String, FunctionScheme>,
+    aliases: HashMap<String, String>,
+    scope: HashMap<String, Type>,
+}
+
+impl Rewriter {
+    fn new(functions: HashMap<String, FunctionScheme>, aliases: HashMap<String, String>) -> Self {
+        Self {
+            functions,
+            aliases,
+            scope: HashMap::new(),
+        }
+    }
+
+    /// 文を rewrite し、scope を更新する。
+    fn rewrite_statement(&mut self, stmt: &Statement) -> Statement {
+        match stmt {
+            Statement::ConstDeclaration {
+                name,
+                type_annotation,
+                init,
+            } => {
+                let (ty, new_init) = self.rewrite_expression(init);
+                self.scope.insert(name.clone(), ty);
+                Statement::ConstDeclaration {
+                    name: name.clone(),
+                    type_annotation: type_annotation.clone(),
+                    init: new_init,
+                }
+            }
+            Statement::Return {
+                argument: Some(expr),
+            } => {
+                let (_, new_expr) = self.rewrite_expression(expr);
+                Statement::Return {
+                    argument: Some(new_expr),
+                }
+            }
+            Statement::Return { argument: None } => stmt.clone(),
+        }
+    }
+
+    /// 式を rewrite し、その型と新しい式を返す。
+    fn rewrite_expression(&mut self, expr: &Expression) -> (Type, Expression) {
+        match expr {
+            Expression::Number(_) => (Type::Concrete("Number".into()), expr.clone()),
+            Expression::String(_) => (Type::Concrete("String".into()), expr.clone()),
+            Expression::Boolean(_) => (Type::Concrete("Boolean".into()), expr.clone()),
+
+            Expression::Identifier(name) => {
+                let resolved = resolve_alias_chain(&self.aliases, name);
+                let ty = self.scope.get(&resolved).cloned().unwrap_or(Type::Var(0));
+                (ty, Expression::Identifier(resolved))
+            }
+
+            Expression::Binary { left, op, right } => {
+                let (lt, new_left) = self.rewrite_expression(left);
+                let (_, new_right) = self.rewrite_expression(right);
+                let ty = match op {
+                    BinaryOp::Add => lt,
+                    BinaryOp::Multiply => Type::Concrete("Number".into()),
+                };
+                (
+                    ty,
+                    Expression::Binary {
+                        left: Box::new(new_left),
+                        op: op.clone(),
+                        right: Box::new(new_right),
+                    },
+                )
+            }
+
+            Expression::Conditional {
+                test,
+                consequent,
+                alternate,
+            } => {
+                let (_, new_test) = self.rewrite_expression(test);
+                let (ct, new_cons) = self.rewrite_expression(consequent);
+                let (_, new_alt) = self.rewrite_expression(alternate);
+                (
+                    ct,
+                    Expression::Conditional {
+                        test: Box::new(new_test),
+                        consequent: Box::new(new_cons),
+                        alternate: Box::new(new_alt),
+                    },
+                )
+            }
+
+            Expression::Array(elems) => {
+                let new_elems: Vec<_> =
+                    elems.iter().map(|e| self.rewrite_expression(e).1).collect();
+                (Type::Concrete("Array".into()), Expression::Array(new_elems))
+            }
+
+            Expression::Member { object, index } => {
+                let (_, new_obj) = self.rewrite_expression(object);
+                let (_, new_idx) = self.rewrite_expression(index);
+                (
+                    Type::Var(0),
+                    Expression::Member {
+                        object: Box::new(new_obj),
+                        index: Box::new(new_idx),
+                    },
+                )
+            }
+
+            Expression::ArrowFunction { .. } => {
+                // 関数本体内のネスト関数: 今は単に clone (将来対応)
+                (Type::Var(0), expr.clone())
+            }
+
+            Expression::Call { callee, arguments } => {
+                // 引数を rewrite して型を集める
+                let walked: Vec<(Type, Expression)> = arguments
+                    .iter()
+                    .map(|a| self.rewrite_expression(a))
+                    .collect();
+                let arg_types: Vec<Type> = walked.iter().map(|(t, _)| t.clone()).collect();
+                let new_args: Vec<Expression> = walked.into_iter().map(|(_, e)| e).collect();
+
+                // callee を解決
+                let (return_ty, new_callee) = match callee.as_ref() {
+                    Expression::Identifier(name) => {
+                        let resolved = resolve_alias_chain(&self.aliases, name);
+                        if let Some(scheme) = self.functions.get(&resolved).cloned() {
+                            if scheme.is_polymorphic() {
+                                // 多相: specialization 名に書き換え
+                                let mut subst = HashMap::new();
+                                for (p, a) in scheme.param_types.iter().zip(arg_types.iter()) {
+                                    collect_subst(p, a, &mut subst);
+                                }
+                                let concrete_return = apply_subst(&scheme.return_type, &subst);
+                                let concrete_params: Vec<Type> = scheme
+                                    .param_types
+                                    .iter()
+                                    .map(|t| apply_subst(t, &subst))
+                                    .collect();
+                                let sig = ConcreteSignature {
+                                    param_types: concrete_params,
+                                    return_type: concrete_return.clone(),
+                                };
+                                let new_name = specialized_name(&resolved, &sig);
+                                (concrete_return, Expression::Identifier(new_name))
+                            } else {
+                                (
+                                    scheme.return_type.clone(),
+                                    Expression::Identifier(resolved),
+                                )
+                            }
+                        } else {
+                            (Type::Var(0), Expression::Identifier(resolved))
+                        }
+                    }
+                    _ => {
+                        let (_, new) = self.rewrite_expression(callee);
+                        (Type::Var(0), new)
+                    }
+                };
+
+                (
+                    return_ty,
+                    Expression::Call {
+                        callee: Box::new(new_callee),
+                        arguments: new_args,
+                    },
+                )
+            }
+        }
+    }
+
+    /// 関数本体 (Vec<Statement>) を rewrite する。新しい scope を確保しつつ、
+    /// パラメータ名 → 型 をあらかじめ scope に入れておく。
+    fn rewrite_body(&mut self, params: &[(String, Type)], body: &[Statement]) -> Vec<Statement> {
+        let saved = self.scope.clone();
+        for (name, ty) in params {
+            self.scope.insert(name.clone(), ty.clone());
+        }
+        let result: Vec<Statement> = body.iter().map(|s| self.rewrite_statement(s)).collect();
+        self.scope = saved;
+        result
+    }
+}
+
+/// プログラム全体を単相化する。
+///
+/// - 多相関数定義 → 各 specialization に展開
+/// - 単相関数定義 → 本体内の Call を書き換え
+/// - エイリアス (`const f2 = id;`) → 削除 (呼び出しは元の関数の specialization に向く)
+/// - その他の文 → Call を書き換え
+pub fn monomorphize(stmts: &[Statement]) -> Vec<Statement> {
+    let info = type_check_with_info(stmts);
+    let specs = collect_specializations(stmts);
+    let aliases = collect_aliases(stmts, &info);
+
+    let polymorphic_names: HashSet<String> = info
+        .functions
+        .iter()
+        .filter(|(_, s)| s.is_polymorphic())
+        .map(|(n, _)| n.clone())
+        .collect();
+
+    let mut rewriter = Rewriter::new(info.functions.clone(), aliases.clone());
+    let mut result = Vec::new();
+
+    for stmt in stmts {
+        match stmt {
+            // 多相関数定義: 各 spec に展開
+            Statement::ConstDeclaration {
+                name,
+                init: Expression::ArrowFunction { .. },
+                ..
+            } if polymorphic_names.contains(name) => {
+                let Some(sigs) = specs.get(name) else {
+                    continue;
+                };
+                for sig in sigs {
+                    let specialized = specialize_function(stmt, sig);
+                    let rewritten = rewrite_specialized(&specialized, sig, &mut rewriter);
+                    result.push(rewritten);
+                }
+            }
+
+            // エイリアス宣言: 削除
+            Statement::ConstDeclaration {
+                name,
+                init: Expression::Identifier(_),
+                ..
+            } if aliases.contains_key(name) => {
+                // skip
+            }
+
+            // それ以外: rewriter で書き換え
+            _ => {
+                result.push(rewriter.rewrite_statement(stmt));
+            }
+        }
+    }
+
+    result
+}
+
+/// 単相化済みの関数定義の本体内の Call を書き換える。
+fn rewrite_specialized(
+    specialized: &Statement,
+    sig: &ConcreteSignature,
+    rewriter: &mut Rewriter,
+) -> Statement {
+    let Statement::ConstDeclaration {
+        name,
+        type_annotation,
+        init:
+            Expression::ArrowFunction {
+                params,
+                return_type,
+                body,
+            },
+    } = specialized
+    else {
+        return specialized.clone();
+    };
+
+    // パラメータ名と具体型のペア
+    let param_with_types: Vec<(String, Type)> = params
+        .iter()
+        .zip(sig.param_types.iter())
+        .map(|(p, t)| (p.name.clone(), t.clone()))
+        .collect();
+
+    let new_body = rewriter.rewrite_body(&param_with_types, body);
+
+    Statement::ConstDeclaration {
+        name: name.clone(),
+        type_annotation: type_annotation.clone(),
+        init: Expression::ArrowFunction {
+            params: params.clone(),
+            return_type: return_type.clone(),
+            body: new_body,
+        },
     }
 }
 
@@ -507,5 +830,101 @@ mod tests {
             panic!();
         };
         assert_eq!(name, "f_Number_Boolean");
+    }
+
+    // --- プログラム全体の単相化 ---
+
+    fn names_of(stmts: &[Statement]) -> Vec<String> {
+        stmts
+            .iter()
+            .filter_map(|s| {
+                if let Statement::ConstDeclaration { name, .. } = s {
+                    Some(name.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn monomorphize_basic_polymorphism() {
+        let stmts = crate::compile(
+            "const id = (x) => { return x; };
+             const a = id(5);
+             const b = id(\"hi\");",
+        );
+        let result = monomorphize(&stmts);
+        let names = names_of(&result);
+
+        assert!(names.contains(&"id_Number".to_string()));
+        assert!(names.contains(&"id_String".to_string()));
+        assert!(!names.contains(&"id".to_string()));
+    }
+
+    #[test]
+    fn monomorphize_rewrites_call_sites() {
+        let stmts = crate::compile(
+            "const id = (x) => { return x; };
+             const a = id(5);",
+        );
+        let result = monomorphize(&stmts);
+
+        let a_stmt = result
+            .iter()
+            .find(|s| matches!(s, Statement::ConstDeclaration { name, .. } if name == "a"))
+            .unwrap();
+        let Statement::ConstDeclaration {
+            init: Expression::Call { callee, .. },
+            ..
+        } = a_stmt
+        else {
+            panic!();
+        };
+        let Expression::Identifier(name) = callee.as_ref() else {
+            panic!();
+        };
+        assert_eq!(name, "id_Number");
+    }
+
+    #[test]
+    fn monomorphize_alias() {
+        let stmts = crate::compile(
+            "const id = (x) => { return x; };
+             const f2 = id;
+             const a = f2(5);",
+        );
+        let result = monomorphize(&stmts);
+        let names = names_of(&result);
+
+        assert!(!names.contains(&"f2".to_string()));
+        assert!(names.contains(&"id_Number".to_string()));
+
+        let a_stmt = result
+            .iter()
+            .find(|s| matches!(s, Statement::ConstDeclaration { name, .. } if name == "a"))
+            .unwrap();
+        let Statement::ConstDeclaration {
+            init: Expression::Call { callee, .. },
+            ..
+        } = a_stmt
+        else {
+            panic!();
+        };
+        let Expression::Identifier(name) = callee.as_ref() else {
+            panic!();
+        };
+        assert_eq!(name, "id_Number");
+    }
+
+    #[test]
+    fn monomorphize_keeps_monomorphic() {
+        let stmts = crate::compile(
+            "const inc = (x: number) => { return x + 1; };
+             const a = inc(5);",
+        );
+        let result = monomorphize(&stmts);
+        let names = names_of(&result);
+        assert!(names.contains(&"inc".to_string()));
     }
 }
