@@ -1,5 +1,3 @@
-use crate::parse::{Expression, Statement};
-
 // セクション ID
 const SECTION_TYPE: u8 = 1;
 const SECTION_FUNCTION: u8 = 3;
@@ -14,6 +12,8 @@ const TYPE_VOID: u8 = 0x40; // 空ブロック型
 // 命令
 const OP_END: u8 = 0x0b;
 const OP_F64_CONST: u8 = 0x44;
+const OP_F64_ADD: u8 = 0xa0;
+const OP_F64_MUL: u8 = 0xa2;
 
 // Export の種別
 const EXPORT_FUNC: u8 = 0x00;
@@ -114,6 +114,8 @@ pub fn encode_f64(value: f64, bytes: &mut Vec<u8>) {
     bytes.extend_from_slice(&value.to_le_bytes());
 }
 
+use crate::parse::{Expression, Statement};
+
 /// 構文木を WASM バイナリに変換する（Phase 2: 最後の文の値を返す main）
 pub fn compile_to_wasm(statements: &[Statement]) -> Vec<u8> {
     let mut out = Vec::new();
@@ -187,13 +189,24 @@ fn emit_statement(stmt: &Statement, out: &mut Vec<u8>) {
     }
 }
 
+use crate::parse::BinaryOp;
+
 fn emit_expression(expr: &Expression, out: &mut Vec<u8>) {
     match expr {
         Expression::Number(n) => {
             out.push(OP_F64_CONST);
             encode_f64(*n as f64, out);
         }
-        _ => panic!("unsupported expression in Phase 2"),
+        Expression::Binary { left, op, right } => {
+            // 左 → 右 → 演算子の順で吐く（ポーランド記法）
+            emit_expression(left, out);
+            emit_expression(right, out);
+            match op {
+                BinaryOp::Add => out.push(OP_F64_ADD),
+                BinaryOp::Multiply => out.push(OP_F64_MUL),
+            }
+        }
+        _ => panic!("unsupported expression in Phase 3"),
     }
 }
 
@@ -347,5 +360,52 @@ mod tests {
 
         assert_eq!(export_name.as_deref(), Some("main"));
         assert_eq!(result_type_seen, Some(42.0));
+    }
+
+    #[test]
+    fn compile_addition() {
+        let stmts = crate::compile("const x = 1 + 2;");
+        let bytes = compile_to_wasm(&stmts);
+        let ops = collect_ops(&bytes);
+        // f64.const 1, f64.const 2, f64.add, end
+        assert!(matches!(
+            ops.first(),
+            Some(wasmparser::Operator::F64Const { .. })
+        ));
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, wasmparser::Operator::F64Add))
+        );
+    }
+
+    #[test]
+    fn compile_mixed_operators() {
+        let stmts = crate::compile("const x = 1 + 2 * 3;");
+        let bytes = compile_to_wasm(&stmts);
+        let ops = collect_ops(&bytes);
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, wasmparser::Operator::F64Add))
+        );
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, wasmparser::Operator::F64Mul))
+        );
+    }
+
+    /// テスト用ヘルパー：関数本体の命令列を全部取り出す
+    #[cfg(test)]
+    fn collect_ops(bytes: &[u8]) -> Vec<wasmparser::Operator<'_>> {
+        let parser = wasmparser::Parser::new(0);
+        let mut ops = Vec::new();
+        for payload in parser.parse_all(bytes) {
+            if let wasmparser::Payload::CodeSectionEntry(body) = payload.unwrap() {
+                let mut reader = body.get_operators_reader().unwrap();
+                while !reader.eof() {
+                    ops.push(reader.read().unwrap());
+                }
+            }
+        }
+        ops
     }
 }
