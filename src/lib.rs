@@ -1,5 +1,6 @@
 use crate::tokenize::tokenize;
 
+pub mod monomorphize;
 pub mod naming;
 pub mod parse;
 pub mod tokenize;
