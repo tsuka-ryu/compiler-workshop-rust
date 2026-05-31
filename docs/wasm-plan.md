@@ -2,16 +2,18 @@
 
 JS版 `solutions/7/wasm.js` を Rust に移植 + 多相関数の monomorphization 対応。
 
+**ステータス: 全 Phase 完了 ✅**
+
 ## テスト戦略
 
 - `wasmparser` クレートで生成バイナリの構造検証
 - 実行はしない（wasmtime を使う案は見送り、依存軽量化を優先）
 
-## モジュール構成
+## モジュール構成（実装後）
 
-未定。以下のどちらか：
-- `src/wasm.rs` 1ファイル
-- `src/wasm/` サブディレクトリでモジュール分割（encoding / sections / codegen / mono など）
+- `src/wasm.rs` — 1 ファイルにまとめた（セクションごとに `===` コメントで区切り）
+- `src/typecheck_mono.rs` — typecheck.rs のコピー + wasm 向けの型情報抽出 (`Type`, `FunctionScheme`, `type_check_with_info`)
+- `src/monomorphize.rs` — 多相関数の単相化 (specialization 収集、AST 書き換え、エイリアス解決)
 
 ## 全体ロードマップ
 

@@ -28,3 +28,12 @@ pub fn compile_full(source: &str) -> CompileResult {
         type_errors,
     }
 }
+
+/// ソースコードを単相化してから wasm バイナリにコンパイルする。
+///
+/// パイプライン: tokenize → parse → monomorphize → wasm
+pub fn compile_to_wasm_full(source: &str) -> Vec<u8> {
+    let statements = parse::parse(tokenize(source));
+    let mono = monomorphize::monomorphize(&statements);
+    wasm::compile_to_wasm(&mono)
+}

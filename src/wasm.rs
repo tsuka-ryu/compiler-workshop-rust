@@ -904,6 +904,46 @@ mod tests {
         }
     }
 
+    // --- end-to-end (monomorphize → wasm) ---
+
+    #[test]
+    fn end_to_end_polymorphic_single_type() {
+        let bytes = crate::compile_to_wasm_full(
+            "const id = (x) => { return x; };
+             const a = id(5);
+             const b = id(10);",
+        );
+
+        let parser = wasmparser::Parser::new(0);
+        let mut func_count = 0;
+        for payload in parser.parse_all(&bytes) {
+            if let wasmparser::Payload::FunctionSection(reader) = payload.unwrap() {
+                func_count = reader.count();
+            }
+        }
+        // id_Number と main で 2 関数
+        assert_eq!(func_count, 2);
+    }
+
+    #[test]
+    fn end_to_end_multiple_instantiations() {
+        let bytes = crate::compile_to_wasm_full(
+            r#"const id = (x) => { return x; };
+               const a = id(5);
+               const b = id("hi");"#,
+        );
+
+        let parser = wasmparser::Parser::new(0);
+        let mut func_count = 0;
+        for payload in parser.parse_all(&bytes) {
+            if let wasmparser::Payload::FunctionSection(reader) = payload.unwrap() {
+                func_count = reader.count();
+            }
+        }
+        // id_Number, id_String, main で 3 関数
+        assert_eq!(func_count, 3);
+    }
+
     #[test]
     fn compile_function_definition_and_call() {
         let stmts = crate::compile(
