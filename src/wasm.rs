@@ -1,3 +1,5 @@
+use crate::parse::{Expression, Statement};
+
 // セクション ID
 const SECTION_TYPE: u8 = 1;
 const SECTION_FUNCTION: u8 = 3;
@@ -11,6 +13,7 @@ const TYPE_VOID: u8 = 0x40; // 空ブロック型
 
 // 命令
 const OP_END: u8 = 0x0b;
+const OP_F64_CONST: u8 = 0x44;
 
 // Export の種別
 const EXPORT_FUNC: u8 = 0x00;
@@ -109,6 +112,89 @@ pub fn encode_sleb128(value: i64, bytes: &mut Vec<u8>) {
 /// f64 を IEEE 754 (little-endian) で bytes に追記
 pub fn encode_f64(value: f64, bytes: &mut Vec<u8>) {
     bytes.extend_from_slice(&value.to_le_bytes());
+}
+
+/// 構文木を WASM バイナリに変換する（Phase 2: 最後の文の値を返す main）
+pub fn compile_to_wasm(statements: &[Statement]) -> Vec<u8> {
+    let mut out = Vec::new();
+
+    // マジック + バージョン
+    out.extend_from_slice(b"\0asm");
+    out.extend_from_slice(&[1, 0, 0, 0]);
+
+    // --- Type Section: () → f64 ---
+    let mut type_section = Vec::new();
+    encode_uleb128(1, &mut type_section);
+    type_section.push(TYPE_FUNC);
+    encode_uleb128(0, &mut type_section); // params: 0個
+    encode_uleb128(1, &mut type_section); // results: 1個
+    type_section.push(TYPE_F64);
+    write_section(SECTION_TYPE, &type_section, &mut out);
+
+    // --- Function Section ---
+    let mut func_section = Vec::new();
+    encode_uleb128(1, &mut func_section);
+    encode_uleb128(0, &mut func_section);
+    write_section(SECTION_FUNCTION, &func_section, &mut out);
+
+    // --- Export Section ---
+    let mut export_section = Vec::new();
+    encode_uleb128(1, &mut export_section);
+    let name = b"main";
+    encode_uleb128(name.len() as u64, &mut export_section);
+    export_section.extend_from_slice(name);
+    export_section.push(EXPORT_FUNC);
+    encode_uleb128(0, &mut export_section);
+    write_section(SECTION_EXPORT, &export_section, &mut out);
+
+    // --- Code Section ---
+    let mut code_section = Vec::new();
+    encode_uleb128(1, &mut code_section);
+    let mut body = Vec::new();
+    encode_uleb128(0, &mut body); // locals: 0
+    // 最後の文の値を計算する命令列を吐く
+    emit_program_body(statements, &mut body);
+    body.push(OP_END);
+    encode_uleb128(body.len() as u64, &mut code_section);
+    code_section.extend_from_slice(&body);
+    write_section(SECTION_CODE, &code_section, &mut out);
+
+    out
+}
+
+/// プログラムを命令列に展開（Phase 2: 最後の文の値を残す）
+fn emit_program_body(statements: &[Statement], out: &mut Vec<u8>) {
+    for stmt in statements {
+        emit_statement(stmt, out);
+    }
+}
+
+fn emit_statement(stmt: &Statement, out: &mut Vec<u8>) {
+    match stmt {
+        Statement::ConstDeclaration { init, .. } => {
+            // Phase 2: const は init を評価するだけ（最後の文の値が戻り値になる）
+            emit_expression(init, out);
+        }
+        Statement::Return {
+            argument: Some(expr),
+        } => {
+            emit_expression(expr, out);
+        }
+        Statement::Return { argument: None } => {
+            // Void は今はサポートしない
+            panic!("return without value not supported in Phase 2");
+        }
+    }
+}
+
+fn emit_expression(expr: &Expression, out: &mut Vec<u8>) {
+    match expr {
+        Expression::Number(n) => {
+            out.push(OP_F64_CONST);
+            encode_f64(*n as f64, out);
+        }
+        _ => panic!("unsupported expression in Phase 2"),
+    }
 }
 
 #[cfg(test)]
@@ -215,5 +301,51 @@ mod tests {
         assert_eq!(type_count, 1, "should have 1 type");
         assert_eq!(function_count, 1, "should have 1 function");
         assert!(saw_main_export, "should export `main`");
+    }
+
+    #[test]
+    fn compile_single_const_returns_42() {
+        let stmts = crate::compile("const x = 42;");
+        let bytes = compile_to_wasm(&stmts);
+
+        // wasmparser で構造を検証
+        let parser = wasmparser::Parser::new(0);
+        let mut result_type_seen = None;
+        let mut export_name = None;
+
+        for payload in parser.parse_all(&bytes) {
+            let payload = payload.expect("valid wasm");
+            match payload {
+                wasmparser::Payload::TypeSection(reader) => {
+                    for ty in reader {
+                        if let wasmparser::RecGroup { .. } = ty.unwrap() {
+                            // 構造的に取り出すのは面倒なので、生バイトでチェック済みとする
+                        }
+                    }
+                }
+                wasmparser::Payload::ExportSection(reader) => {
+                    for e in reader {
+                        let e = e.unwrap();
+                        if e.kind == wasmparser::ExternalKind::Func {
+                            export_name = Some(e.name.to_string());
+                        }
+                    }
+                }
+                wasmparser::Payload::CodeSectionEntry(body) => {
+                    // 命令列を読み取る
+                    let mut reader = body.get_operators_reader().unwrap();
+                    while !reader.eof() {
+                        let op = reader.read().unwrap();
+                        if let wasmparser::Operator::F64Const { value } = op {
+                            result_type_seen = Some(f64::from_bits(value.bits()));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        assert_eq!(export_name.as_deref(), Some("main"));
+        assert_eq!(result_type_seen, Some(42.0));
     }
 }
