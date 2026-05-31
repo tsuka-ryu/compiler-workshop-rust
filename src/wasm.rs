@@ -14,9 +14,39 @@ const OP_END: u8 = 0x0b;
 const OP_F64_CONST: u8 = 0x44;
 const OP_F64_ADD: u8 = 0xa0;
 const OP_F64_MUL: u8 = 0xa2;
+const OP_LOCAL_GET: u8 = 0x20;
+const OP_LOCAL_SET: u8 = 0x21;
+const OP_DROP: u8 = 0x1a;
 
 // Export の種別
 const EXPORT_FUNC: u8 = 0x00;
+
+struct FunctionBuilder {
+    /// const の名前 → local index
+    locals: std::collections::HashMap<String, u32>,
+    /// 命令列
+    code: Vec<u8>,
+}
+
+impl FunctionBuilder {
+    fn new() -> Self {
+        Self {
+            locals: std::collections::HashMap::new(),
+            code: Vec::new(),
+        }
+    }
+
+    /// 新しいローカルを確保してインデックスを返す
+    fn declare(&mut self, name: String) -> u32 {
+        let index = self.locals.len() as u32;
+        self.locals.insert(name, index);
+        index
+    }
+
+    fn lookup(&self, name: &str) -> Option<u32> {
+        self.locals.get(name).copied()
+    }
+}
 
 /// Unsigned LEB128 でエンコードして bytes に追記
 pub fn encode_uleb128(value: u64, bytes: &mut Vec<u8>) {
@@ -153,7 +183,6 @@ pub fn compile_to_wasm(statements: &[Statement]) -> Vec<u8> {
     let mut code_section = Vec::new();
     encode_uleb128(1, &mut code_section);
     let mut body = Vec::new();
-    encode_uleb128(0, &mut body); // locals: 0
     // 最後の文の値を計算する命令列を吐く
     emit_program_body(statements, &mut body);
     body.push(OP_END);
@@ -164,49 +193,84 @@ pub fn compile_to_wasm(statements: &[Statement]) -> Vec<u8> {
     out
 }
 
-/// プログラムを命令列に展開（Phase 2: 最後の文の値を残す）
+/// プログラムを命令列に展開
 fn emit_program_body(statements: &[Statement], out: &mut Vec<u8>) {
+    let mut fb = FunctionBuilder::new();
+    let mut last_const_name: Option<String> = None;
+
     for stmt in statements {
-        emit_statement(stmt, out);
+        emit_statement(stmt, &mut fb);
+        if let Statement::ConstDeclaration { name, .. } = stmt {
+            last_const_name = Some(name.clone());
+        }
     }
+
+    // 最後の const の値を local.get でスタックに乗せる
+    if let Some(name) = last_const_name {
+        if let Some(idx) = fb.lookup(&name) {
+            fb.code.push(OP_LOCAL_GET);
+            encode_uleb128(idx as u64, &mut fb.code);
+        }
+    }
+
+    // ローカル変数の宣言を out の先頭に書く（個数 + 各グループ）
+    // この関数では全部 f64 なので 1 グループ
+    let local_count = fb.locals.len() as u64;
+    if local_count > 0 {
+        encode_uleb128(1, out); // グループ数: 1
+        encode_uleb128(local_count, out); // この型のローカルが何個
+        out.push(TYPE_F64);
+    } else {
+        encode_uleb128(0, out); // グループ数: 0
+    }
+
+    // 命令列をくっつける
+    out.extend_from_slice(&fb.code);
 }
 
-fn emit_statement(stmt: &Statement, out: &mut Vec<u8>) {
+fn emit_statement(stmt: &Statement, fb: &mut FunctionBuilder) {
     match stmt {
-        Statement::ConstDeclaration { init, .. } => {
-            // Phase 2: const は init を評価するだけ（最後の文の値が戻り値になる）
-            emit_expression(init, out);
+        Statement::ConstDeclaration { name, init, .. } => {
+            emit_expression(init, fb);
+            let idx = fb.declare(name.clone());
+            fb.code.push(OP_LOCAL_SET);
+            encode_uleb128(idx as u64, &mut fb.code);
         }
         Statement::Return {
             argument: Some(expr),
         } => {
-            emit_expression(expr, out);
+            emit_expression(expr, fb);
         }
         Statement::Return { argument: None } => {
-            // Void は今はサポートしない
-            panic!("return without value not supported in Phase 2");
+            panic!("return without value not supported");
         }
     }
 }
 
 use crate::parse::BinaryOp;
 
-fn emit_expression(expr: &Expression, out: &mut Vec<u8>) {
+fn emit_expression(expr: &Expression, fb: &mut FunctionBuilder) {
     match expr {
         Expression::Number(n) => {
-            out.push(OP_F64_CONST);
-            encode_f64(*n as f64, out);
+            fb.code.push(OP_F64_CONST);
+            encode_f64(*n as f64, &mut fb.code);
+        }
+        Expression::Identifier(name) => {
+            let idx = fb
+                .lookup(name)
+                .unwrap_or_else(|| panic!("undeclared variable: {name}"));
+            fb.code.push(OP_LOCAL_GET);
+            encode_uleb128(idx as u64, &mut fb.code);
         }
         Expression::Binary { left, op, right } => {
-            // 左 → 右 → 演算子の順で吐く（ポーランド記法）
-            emit_expression(left, out);
-            emit_expression(right, out);
+            emit_expression(left, fb);
+            emit_expression(right, fb);
             match op {
-                BinaryOp::Add => out.push(OP_F64_ADD),
-                BinaryOp::Multiply => out.push(OP_F64_MUL),
+                BinaryOp::Add => fb.code.push(OP_F64_ADD),
+                BinaryOp::Multiply => fb.code.push(OP_F64_MUL),
             }
         }
-        _ => panic!("unsupported expression in Phase 3"),
+        _ => panic!("unsupported expression"),
     }
 }
 
@@ -407,5 +471,42 @@ mod tests {
             }
         }
         ops
+    }
+
+    #[test]
+    fn compile_two_consts() {
+        let stmts = crate::compile("const x = 5; const y = x + 1;");
+        let bytes = compile_to_wasm(&stmts);
+        let ops = collect_ops(&bytes);
+
+        // f64.const 5, local.set 0, local.get 0, f64.const 1, f64.add, local.set 1, local.get 1, end
+        let has_local_set = ops
+            .iter()
+            .any(|op| matches!(op, wasmparser::Operator::LocalSet { .. }));
+        let has_local_get = ops
+            .iter()
+            .any(|op| matches!(op, wasmparser::Operator::LocalGet { .. }));
+        assert!(has_local_set);
+        assert!(has_local_get);
+    }
+
+    #[test]
+    fn compile_const_then_reference() {
+        let stmts = crate::compile("const x = 42;");
+        let bytes = compile_to_wasm(&stmts);
+        // wasmparser でローカル変数の宣言があるか確認
+        let parser = wasmparser::Parser::new(0);
+        for payload in parser.parse_all(&bytes) {
+            if let wasmparser::Payload::CodeSectionEntry(body) = payload.unwrap() {
+                let locals: Vec<_> = body
+                    .get_locals_reader()
+                    .unwrap()
+                    .into_iter()
+                    .map(|r| r.unwrap())
+                    .collect();
+                // f64 が1つ宣言されてるはず
+                assert!(!locals.is_empty(), "should declare locals");
+            }
+        }
     }
 }
