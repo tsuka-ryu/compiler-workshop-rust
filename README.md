@@ -72,6 +72,7 @@ cargo test
 ## ドキュメント
 
 - [docs/wasm-plan.md](docs/wasm-plan.md) — wasm 生成と monomorphization の設計方針
+- [docs/next-steps.md](docs/next-steps.md) — 今後の学習ロードマップ (Pratt parser、Resilient parsing、Span、Result、codespan-reporting、Linter、Formatter、LSP)
 
 ## 参考
 
