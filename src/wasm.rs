@@ -25,31 +25,59 @@ const OP_ELSE: u8 = 0x05;
 // Export の種別
 const EXPORT_FUNC: u8 = 0x00;
 
+struct LocalInfo {
+    index: u32,
+    wasm_type: u8,
+}
+
 struct FunctionBuilder {
-    /// const の名前 → local index
-    locals: std::collections::HashMap<String, u32>,
-    /// 命令列
+    locals: std::collections::HashMap<String, LocalInfo>,
+    /// 非パラメータのローカルの型（宣言順）
+    local_types: Vec<u8>,
+    /// パラメータ数（local index 振り分け用）
+    param_count: u32,
     code: Vec<u8>,
+    /// 関数名 → 関数 index（CALL 用）
+    function_indices: std::collections::HashMap<String, u32>,
 }
 
 impl FunctionBuilder {
-    fn new() -> Self {
+    fn new(function_indices: std::collections::HashMap<String, u32>) -> Self {
         Self {
             locals: std::collections::HashMap::new(),
+            local_types: Vec::new(),
+            param_count: 0,
             code: Vec::new(),
+            function_indices,
         }
     }
 
-    /// 新しいローカルを確保してインデックスを返す
-    fn declare(&mut self, name: String) -> u32 {
+    /// パラメータを登録（先に呼ぶ）
+    fn declare_param(&mut self, name: String, wasm_type: u8) {
         let index = self.locals.len() as u32;
-        self.locals.insert(name, index);
+        self.locals.insert(name, LocalInfo { index, wasm_type });
+        self.param_count += 1;
+    }
+
+    /// 普通のローカルを登録
+    fn declare_local(&mut self, name: String, wasm_type: u8) -> u32 {
+        let index = self.locals.len() as u32;
+        self.locals.insert(name, LocalInfo { index, wasm_type });
+        self.local_types.push(wasm_type);
         index
     }
 
-    fn lookup(&self, name: &str) -> Option<u32> {
-        self.locals.get(name).copied()
+    fn lookup(&self, name: &str) -> Option<&LocalInfo> {
+        self.locals.get(name)
     }
+}
+
+struct FunctionInfo {
+    name: String,
+    param_types: Vec<u8>, // f64 / i32
+    return_type: u8,
+    body: Vec<u8>,        // 命令列 (END なし)
+    local_types: Vec<u8>, // 非パラメータのローカル変数の型
 }
 
 /// Unsigned LEB128 でエンコードして bytes に追記
@@ -150,96 +178,175 @@ pub fn encode_f64(value: f64, bytes: &mut Vec<u8>) {
 
 use crate::parse::{Expression, Statement};
 
-/// 構文木を WASM バイナリに変換する（Phase 2: 最後の文の値を返す main）
+const OP_CALL: u8 = 0x10;
+
 pub fn compile_to_wasm(statements: &[Statement]) -> Vec<u8> {
+    // --- 関数を抽出 ---
+    let mut user_functions: Vec<FunctionInfo> = Vec::new();
+    let mut main_body_stmts: Vec<&Statement> = Vec::new();
+    let mut function_indices: std::collections::HashMap<String, u32> =
+        std::collections::HashMap::new();
+
+    for stmt in statements {
+        if let Statement::ConstDeclaration { name, init, .. } = stmt {
+            if let Expression::ArrowFunction {
+                params,
+                body,
+                return_type,
+                ..
+            } = init
+            {
+                let idx = user_functions.len() as u32;
+                function_indices.insert(name.clone(), idx);
+
+                let param_types: Vec<u8> = params
+                    .iter()
+                    .map(|p| {
+                        p.type_annotation
+                            .as_ref()
+                            .map(wasm_type_from_annotation)
+                            .unwrap_or(TYPE_F64)
+                    })
+                    .collect();
+                let ret_type = return_type
+                    .as_ref()
+                    .map(wasm_type_from_annotation)
+                    .unwrap_or(TYPE_F64);
+
+                let mut fb = FunctionBuilder::new(function_indices.clone());
+                for (param, &ty) in params.iter().zip(param_types.iter()) {
+                    fb.declare_param(param.name.clone(), ty);
+                }
+                for stmt in body {
+                    emit_statement(stmt, &mut fb);
+                }
+
+                user_functions.push(FunctionInfo {
+                    name: name.clone(),
+                    param_types,
+                    return_type: ret_type,
+                    body: fb.code,
+                    local_types: fb.local_types,
+                });
+                continue;
+            }
+        }
+        main_body_stmts.push(stmt);
+    }
+
+    // --- main 関数を組み立て ---
+    let main_idx = user_functions.len() as u32;
+    function_indices.insert("__main__".to_string(), main_idx);
+    let mut main_fb = FunctionBuilder::new(function_indices.clone());
+    let mut last_name: Option<String> = None;
+    for stmt in &main_body_stmts {
+        emit_statement(stmt, &mut main_fb);
+        if let Statement::ConstDeclaration { name, .. } = stmt {
+            last_name = Some(name.clone());
+        }
+    }
+    // 最後の const の値を取り出す
+    if let Some(name) = &last_name {
+        if let Some(info) = main_fb.lookup(name) {
+            let idx = info.index;
+            main_fb.code.push(OP_LOCAL_GET);
+            encode_uleb128(idx as u64, &mut main_fb.code);
+        }
+    }
+    let main_return = last_name
+        .as_ref()
+        .and_then(|n| main_fb.lookup(n))
+        .map(|info| info.wasm_type)
+        .unwrap_or(TYPE_F64);
+    user_functions.push(FunctionInfo {
+        name: "main".to_string(),
+        param_types: vec![],
+        return_type: main_return,
+        body: main_fb.code,
+        local_types: main_fb.local_types,
+    });
+
+    // --- バイナリ書き出し ---
+    write_module(&user_functions, main_idx)
+}
+
+fn write_module(functions: &[FunctionInfo], main_idx: u32) -> Vec<u8> {
     let mut out = Vec::new();
 
     // マジック + バージョン
     out.extend_from_slice(b"\0asm");
     out.extend_from_slice(&[1, 0, 0, 0]);
 
-    // --- Type Section: () → f64 ---
+    // --- Type Section ---
     let mut type_section = Vec::new();
-    encode_uleb128(1, &mut type_section);
-    type_section.push(TYPE_FUNC);
-    encode_uleb128(0, &mut type_section); // params: 0個
-    encode_uleb128(1, &mut type_section); // results: 1個
-    type_section.push(TYPE_F64);
+    encode_uleb128(functions.len() as u64, &mut type_section);
+    for f in functions {
+        type_section.push(TYPE_FUNC);
+        encode_uleb128(f.param_types.len() as u64, &mut type_section);
+        for &ty in &f.param_types {
+            type_section.push(ty);
+        }
+        encode_uleb128(1, &mut type_section); // results: 1
+        type_section.push(f.return_type);
+    }
     write_section(SECTION_TYPE, &type_section, &mut out);
 
     // --- Function Section ---
     let mut func_section = Vec::new();
-    encode_uleb128(1, &mut func_section);
-    encode_uleb128(0, &mut func_section);
+    encode_uleb128(functions.len() as u64, &mut func_section);
+    for i in 0..functions.len() as u32 {
+        encode_uleb128(i as u64, &mut func_section);
+    }
     write_section(SECTION_FUNCTION, &func_section, &mut out);
 
-    // --- Export Section ---
+    // --- Export Section: main だけ ---
     let mut export_section = Vec::new();
     encode_uleb128(1, &mut export_section);
     let name = b"main";
     encode_uleb128(name.len() as u64, &mut export_section);
     export_section.extend_from_slice(name);
     export_section.push(EXPORT_FUNC);
-    encode_uleb128(0, &mut export_section);
+    encode_uleb128(main_idx as u64, &mut export_section);
     write_section(SECTION_EXPORT, &export_section, &mut out);
 
     // --- Code Section ---
     let mut code_section = Vec::new();
-    encode_uleb128(1, &mut code_section);
-    let mut body = Vec::new();
-    // 最後の文の値を計算する命令列を吐く
-    emit_program_body(statements, &mut body);
-    body.push(OP_END);
-    encode_uleb128(body.len() as u64, &mut code_section);
-    code_section.extend_from_slice(&body);
+    encode_uleb128(functions.len() as u64, &mut code_section);
+    for f in functions {
+        let mut body = Vec::new();
+        // ローカル宣言：型ごとにグループ化（簡略：1個ずつグループにする）
+        encode_uleb128(f.local_types.len() as u64, &mut body);
+        for &ty in &f.local_types {
+            encode_uleb128(1, &mut body);
+            body.push(ty);
+        }
+        body.extend_from_slice(&f.body);
+        body.push(OP_END);
+        encode_uleb128(body.len() as u64, &mut code_section);
+        code_section.extend_from_slice(&body);
+    }
     write_section(SECTION_CODE, &code_section, &mut out);
 
     out
 }
 
-/// プログラムを命令列に展開
-fn emit_program_body(statements: &[Statement], out: &mut Vec<u8>) {
-    let mut fb = FunctionBuilder::new();
-    let mut last_const_name: Option<String> = None;
-
-    for stmt in statements {
-        emit_statement(stmt, &mut fb);
-        if let Statement::ConstDeclaration { name, .. } = stmt {
-            last_const_name = Some(name.clone());
-        }
-    }
-
-    // 最後の const の値を local.get でスタックに乗せる
-    if let Some(name) = last_const_name {
-        if let Some(idx) = fb.lookup(&name) {
-            fb.code.push(OP_LOCAL_GET);
-            encode_uleb128(idx as u64, &mut fb.code);
-        }
-    }
-
-    // ローカル変数の宣言を out の先頭に書く（個数 + 各グループ）
-    // この関数では全部 f64 なので 1 グループ
-    let local_count = fb.locals.len() as u64;
-    if local_count > 0 {
-        encode_uleb128(1, out); // グループ数: 1
-        encode_uleb128(local_count, out); // この型のローカルが何個
-        out.push(TYPE_F64);
-    } else {
-        encode_uleb128(0, out); // グループ数: 0
-    }
-
-    // 命令列をくっつける
-    out.extend_from_slice(&fb.code);
-}
-
 fn emit_statement(stmt: &Statement, fb: &mut FunctionBuilder) {
     match stmt {
-        Statement::ConstDeclaration { name, init, .. } => {
+        Statement::ConstDeclaration {
+            name,
+            init,
+            type_annotation,
+        } => {
             emit_expression(init, fb);
-            let idx = fb.declare(name.clone());
+            let ty = type_annotation
+                .as_ref()
+                .map(wasm_type_from_annotation)
+                .unwrap_or_else(|| infer_simple_type(init));
+            let idx = fb.declare_local(name.clone(), ty);
             fb.code.push(OP_LOCAL_SET);
             encode_uleb128(idx as u64, &mut fb.code);
         }
+
         Statement::Return {
             argument: Some(expr),
         } => {
@@ -268,7 +375,8 @@ fn emit_expression(expr: &Expression, fb: &mut FunctionBuilder) {
         Expression::Identifier(name) => {
             let idx = fb
                 .lookup(name)
-                .unwrap_or_else(|| panic!("undeclared variable: {name}"));
+                .unwrap_or_else(|| panic!("undeclared variable: {name}"))
+                .index;
             fb.code.push(OP_LOCAL_GET);
             encode_uleb128(idx as u64, &mut fb.code);
         }
@@ -304,8 +412,46 @@ fn emit_expression(expr: &Expression, fb: &mut FunctionBuilder) {
             // end
             fb.code.push(OP_END);
         }
+        Expression::Call { callee, arguments } => {
+            // 引数を順に積む
+            for arg in arguments {
+                emit_expression(arg, fb);
+            }
+            // CALL 命令
+            if let Expression::Identifier(name) = callee.as_ref() {
+                let idx = fb
+                    .function_indices
+                    .get(name)
+                    .copied()
+                    .unwrap_or_else(|| panic!("unknown function: {name}"));
+                fb.code.push(OP_CALL);
+                encode_uleb128(idx as u64, &mut fb.code);
+            } else {
+                panic!("only identifier callees supported");
+            }
+        }
 
         _ => panic!("unsupported expression"),
+    }
+}
+
+use crate::parse::TypeAnnotation;
+
+fn wasm_type_from_annotation(ta: &TypeAnnotation) -> u8 {
+    match ta {
+        TypeAnnotation::Named(name) => match name.as_str() {
+            "number" | "Float" => TYPE_F64,
+            "boolean" | "Bool" => TYPE_I32,
+            _ => TYPE_F64,
+        },
+        _ => TYPE_F64,
+    }
+}
+
+fn infer_simple_type(expr: &Expression) -> u8 {
+    match expr {
+        Expression::Boolean(_) => TYPE_I32,
+        _ => TYPE_F64,
     }
 }
 
@@ -568,5 +714,38 @@ mod tests {
             .any(|op| matches!(op, wasmparser::Operator::Else));
         assert!(has_if, "should have if");
         assert!(has_else, "should have else");
+    }
+
+    #[test]
+    fn compile_function_definition_and_call() {
+        let stmts = crate::compile(
+            "const add = (a: number, b: number) => { return a + b; };
+         const r = add(1, 2);",
+        );
+        let bytes = compile_to_wasm(&stmts);
+
+        let parser = wasmparser::Parser::new(0);
+        let mut func_count = 0;
+        let mut has_call = false;
+
+        for payload in parser.parse_all(&bytes) {
+            match payload.unwrap() {
+                wasmparser::Payload::FunctionSection(reader) => {
+                    func_count = reader.count();
+                }
+                wasmparser::Payload::CodeSectionEntry(body) => {
+                    let mut r = body.get_operators_reader().unwrap();
+                    while !r.eof() {
+                        if matches!(r.read().unwrap(), wasmparser::Operator::Call { .. }) {
+                            has_call = true;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        assert_eq!(func_count, 2, "add + main");
+        assert!(has_call, "should call add");
     }
 }
