@@ -6,7 +6,7 @@
 //! 次のフェーズ (Phase 10/11) で、この情報をもとに関数を複製して
 //! 単相な AST に書き換える。
 
-use crate::parse::{BinaryOp, Expression, Statement};
+use crate::parse::{BinaryOp, Expression, Parameter, Statement, TypeAnnotation};
 use crate::typecheck_mono::{FunctionScheme, Type, type_check_with_info};
 use std::collections::{HashMap, HashSet};
 
@@ -227,6 +227,89 @@ fn apply_subst(t: &Type, subst: &HashMap<u32, Type>) -> Type {
     }
 }
 
+// =============================================================================
+// 関数 AST の複製と型置換 (Phase 10)
+// =============================================================================
+
+/// `Type` を parser の `TypeAnnotation` に変換する。
+///
+/// typecheck 側の "Number" と parser/wasm 側の "number" の表記揺れを吸収する。
+fn type_to_annotation(t: &Type) -> TypeAnnotation {
+    match t {
+        Type::Concrete(name) => {
+            let annotation_name = match name.as_str() {
+                "Number" => "number",
+                "String" => "string",
+                "Boolean" => "boolean",
+                "Void" => "void",
+                other => other,
+            };
+            TypeAnnotation::Named(annotation_name.to_string())
+        }
+        _ => panic!("specialization should only contain concrete types"),
+    }
+}
+
+/// 単相化された関数の名前を生成する。
+///
+/// 例: ("id", [Number]→Number) → "id_Number"
+///     ("add", [Number,Boolean]→Number) → "add_Number_Boolean"
+pub fn specialized_name(original: &str, sig: &ConcreteSignature) -> String {
+    let mut name = original.to_string();
+    for t in &sig.param_types {
+        name.push('_');
+        name.push_str(&type_short_name(t));
+    }
+    name
+}
+
+fn type_short_name(t: &Type) -> String {
+    match t {
+        Type::Concrete(name) => name.clone(),
+        _ => "Unknown".to_string(),
+    }
+}
+
+/// 元の関数定義と `ConcreteSignature` から、単相版の `Statement` を生成する。
+///
+/// `original` は `Statement::ConstDeclaration { init: ArrowFunction, .. }` でなければならない。
+/// body はそのままコピーされる (Call の書き換えは Phase 11 で行う)。
+pub fn specialize_function(original: &Statement, sig: &ConcreteSignature) -> Statement {
+    let (orig_name, orig_params, orig_body) = match original {
+        Statement::ConstDeclaration {
+            name,
+            init: Expression::ArrowFunction { params, body, .. },
+            ..
+        } => (name, params, body),
+        _ => panic!("specialize_function expects const arrow function"),
+    };
+
+    // 各 param に具体型の annotation を付け直す
+    let new_params: Vec<Parameter> = orig_params
+        .iter()
+        .zip(sig.param_types.iter())
+        .map(|(p, ty)| Parameter {
+            name: p.name.clone(),
+            type_annotation: Some(type_to_annotation(ty)),
+        })
+        .collect();
+
+    // return_type も具体化
+    let new_return_type = Some(type_to_annotation(&sig.return_type));
+
+    let new_init = Expression::ArrowFunction {
+        params: new_params,
+        return_type: new_return_type,
+        body: orig_body.clone(),
+    };
+
+    Statement::ConstDeclaration {
+        name: specialized_name(orig_name, sig),
+        type_annotation: None,
+        init: new_init,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -359,5 +442,70 @@ mod tests {
         );
         let specs = collect_specializations(&stmts);
         assert_eq!(specs["id"].len(), 1);
+    }
+
+    // --- 関数 AST の複製 + 型置換 ---
+
+    #[test]
+    fn specialize_id_for_number() {
+        let stmts = crate::compile("const id = (x) => { return x; };");
+        let sig = ConcreteSignature {
+            param_types: vec![Type::Concrete("Number".into())],
+            return_type: Type::Concrete("Number".into()),
+        };
+        let specialized = specialize_function(&stmts[0], &sig);
+        let Statement::ConstDeclaration {
+            name,
+            init:
+                Expression::ArrowFunction {
+                    params,
+                    return_type,
+                    ..
+                },
+            ..
+        } = &specialized
+        else {
+            panic!("expected const arrow function");
+        };
+        assert_eq!(name, "id_Number");
+        assert_eq!(
+            params[0].type_annotation,
+            Some(TypeAnnotation::Named("number".into()))
+        );
+        assert_eq!(
+            return_type.clone().unwrap(),
+            TypeAnnotation::Named("number".into())
+        );
+    }
+
+    #[test]
+    fn specialize_id_for_string() {
+        let stmts = crate::compile("const id = (x) => { return x; };");
+        let sig = ConcreteSignature {
+            param_types: vec![Type::Concrete("String".into())],
+            return_type: Type::Concrete("String".into()),
+        };
+        let specialized = specialize_function(&stmts[0], &sig);
+        let Statement::ConstDeclaration { name, .. } = &specialized else {
+            panic!();
+        };
+        assert_eq!(name, "id_String");
+    }
+
+    #[test]
+    fn specialize_multi_param() {
+        let stmts = crate::compile("const f = (a, b) => { return a; };");
+        let sig = ConcreteSignature {
+            param_types: vec![
+                Type::Concrete("Number".into()),
+                Type::Concrete("Boolean".into()),
+            ],
+            return_type: Type::Concrete("Number".into()),
+        };
+        let specialized = specialize_function(&stmts[0], &sig);
+        let Statement::ConstDeclaration { name, .. } = &specialized else {
+            panic!();
+        };
+        assert_eq!(name, "f_Number_Boolean");
     }
 }

@@ -1,6 +1,6 @@
 use crate::tokenize::Token;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Statement {
     ConstDeclaration {
         name: String,
@@ -12,7 +12,7 @@ pub enum Statement {
     },
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Expression {
     Number(i64),
     String(String),
@@ -44,19 +44,19 @@ pub enum Expression {
     },
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum BinaryOp {
     Add,
     Multiply,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Parameter {
     pub name: String,
     pub type_annotation: Option<TypeAnnotation>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum TypeAnnotation {
     Named(String),
     Array(Box<TypeAnnotation>),
