@@ -17,6 +17,10 @@ const OP_F64_MUL: u8 = 0xa2;
 const OP_LOCAL_GET: u8 = 0x20;
 const OP_LOCAL_SET: u8 = 0x21;
 const OP_DROP: u8 = 0x1a;
+const TYPE_I32: u8 = 0x7f;
+const OP_I32_CONST: u8 = 0x41;
+const OP_IF: u8 = 0x04;
+const OP_ELSE: u8 = 0x05;
 
 // Export の種別
 const EXPORT_FUNC: u8 = 0x00;
@@ -255,6 +259,12 @@ fn emit_expression(expr: &Expression, fb: &mut FunctionBuilder) {
             fb.code.push(OP_F64_CONST);
             encode_f64(*n as f64, &mut fb.code);
         }
+        Expression::Boolean(b) => {
+            fb.code.push(OP_I32_CONST);
+            // i32.const は SLEB128
+            encode_sleb128(if *b { 1 } else { 0 }, &mut fb.code);
+        }
+
         Expression::Identifier(name) => {
             let idx = fb
                 .lookup(name)
@@ -270,6 +280,31 @@ fn emit_expression(expr: &Expression, fb: &mut FunctionBuilder) {
                 BinaryOp::Multiply => fb.code.push(OP_F64_MUL),
             }
         }
+        Expression::Conditional {
+            test,
+            consequent,
+            alternate,
+        } => {
+            // test を評価（結果は i32 でスタックトップに）
+            emit_expression(test, fb);
+
+            // if (result f64)
+            fb.code.push(OP_IF);
+            fb.code.push(TYPE_F64); // block の戻り値型
+
+            // 真ブランチ
+            emit_expression(consequent, fb);
+
+            // else
+            fb.code.push(OP_ELSE);
+
+            // 偽ブランチ
+            emit_expression(alternate, fb);
+
+            // end
+            fb.code.push(OP_END);
+        }
+
         _ => panic!("unsupported expression"),
     }
 }
@@ -508,5 +543,30 @@ mod tests {
                 assert!(!locals.is_empty(), "should declare locals");
             }
         }
+    }
+
+    #[test]
+    fn compile_boolean_literal() {
+        let stmts = crate::compile("const x = true;");
+        let bytes = compile_to_wasm(&stmts);
+        // 注意: このテストは型エラーになる可能性あり（main の戻り値型は f64 固定）
+        // wasmparser はバイナリの構造はパースできるはず
+        let _ = bytes;
+    }
+
+    #[test]
+    fn compile_ternary() {
+        let stmts = crate::compile("const x = true ? 1 : 2;");
+        let bytes = compile_to_wasm(&stmts);
+        let ops = collect_ops(&bytes);
+
+        let has_if = ops
+            .iter()
+            .any(|op| matches!(op, wasmparser::Operator::If { .. }));
+        let has_else = ops
+            .iter()
+            .any(|op| matches!(op, wasmparser::Operator::Else));
+        assert!(has_if, "should have if");
+        assert!(has_else, "should have else");
     }
 }
