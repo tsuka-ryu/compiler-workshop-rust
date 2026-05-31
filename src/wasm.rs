@@ -16,8 +16,10 @@ use std::collections::HashMap;
 // セクション ID
 const SECTION_TYPE: u8 = 1;
 const SECTION_FUNCTION: u8 = 3;
+const SECTION_MEMORY: u8 = 5;
 const SECTION_EXPORT: u8 = 7;
 const SECTION_CODE: u8 = 10;
+const SECTION_DATA: u8 = 11;
 
 // 型タグ
 const TYPE_FUNC: u8 = 0x60; // 関数型のヘッダ
@@ -117,15 +119,21 @@ struct FunctionBuilder {
     code: Vec<u8>,
     /// 関数名 → 関数 index (CALL 命令に必要)
     function_indices: HashMap<String, u32>,
+    /// 文字列内容 → メモリオフセット (StringLit emit 用)
+    string_offsets: HashMap<String, u32>,
 }
 
 impl FunctionBuilder {
-    fn new(function_indices: HashMap<String, u32>) -> Self {
+    fn new(
+        function_indices: HashMap<String, u32>,
+        string_offsets: HashMap<String, u32>,
+    ) -> Self {
         Self {
             locals: HashMap::new(),
             local_types: Vec::new(),
             code: Vec::new(),
             function_indices,
+            string_offsets,
         }
     }
 
@@ -145,6 +153,33 @@ impl FunctionBuilder {
 
     fn lookup(&self, name: &str) -> Option<&LocalInfo> {
         self.locals.get(name)
+    }
+}
+
+/// 文字列リテラル → メモリ内オフセットの対応表。
+///
+/// プログラム中に登場する文字列を事前に収集し、それぞれにメモリ上のオフセットを割り当てる。
+/// 同じ内容の文字列は同じオフセットを共有する (intern)。
+#[derive(Default)]
+struct StringTable {
+    /// 文字列内容 → offset
+    map: HashMap<String, u32>,
+    /// (offset, bytes) の並び (Data Section 書き出し用、宣言順)
+    entries: Vec<(u32, Vec<u8>)>,
+    next_offset: u32,
+}
+
+impl StringTable {
+    /// 文字列を登録し、そのオフセットを返す (同じ内容なら同じオフセット)
+    fn intern(&mut self, s: &str) {
+        if self.map.contains_key(s) {
+            return;
+        }
+        let off = self.next_offset;
+        let bytes = s.as_bytes().to_vec();
+        self.next_offset += bytes.len() as u32;
+        self.map.insert(s.to_string(), off);
+        self.entries.push((off, bytes));
     }
 }
 
@@ -218,6 +253,13 @@ pub fn build_empty_module() -> Vec<u8> {
 /// 2. 残りの top-level 文は **main** 関数にまとめる (最後の const の値が戻り値)
 /// 3. 全関数を Type / Function / Code セクションに書き出す
 pub fn compile_to_wasm(statements: &[Statement]) -> Vec<u8> {
+    // --- 0. 文字列リテラルを事前収集してオフセットを割り当てる ---
+    let mut string_table = StringTable::default();
+    for stmt in statements {
+        collect_strings_stmt(stmt, &mut string_table);
+    }
+    let string_offsets = string_table.map.clone();
+
     let mut user_functions: Vec<FunctionInfo> = Vec::new();
     let mut main_body_stmts: Vec<&Statement> = Vec::new();
     let mut function_indices: HashMap<String, u32> = HashMap::new();
@@ -249,7 +291,8 @@ pub fn compile_to_wasm(statements: &[Statement]) -> Vec<u8> {
                     .map(wasm_type_from_annotation)
                     .unwrap_or(TYPE_F64);
 
-                let mut fb = FunctionBuilder::new(function_indices.clone());
+                let mut fb =
+                    FunctionBuilder::new(function_indices.clone(), string_offsets.clone());
                 for (param, &ty) in params.iter().zip(param_types.iter()) {
                     fb.declare_param(param.name.clone(), ty);
                 }
@@ -272,7 +315,7 @@ pub fn compile_to_wasm(statements: &[Statement]) -> Vec<u8> {
 
     // --- 2. main 関数を組み立て ---
     let main_idx = user_functions.len() as u32;
-    let mut main_fb = FunctionBuilder::new(function_indices.clone());
+    let mut main_fb = FunctionBuilder::new(function_indices.clone(), string_offsets.clone());
     let mut last_name: Option<String> = None;
     for stmt in &main_body_stmts {
         emit_statement(stmt, &mut main_fb);
@@ -305,14 +348,14 @@ pub fn compile_to_wasm(statements: &[Statement]) -> Vec<u8> {
     });
 
     // --- 3. バイナリ書き出し ---
-    write_module(&user_functions, main_idx)
+    write_module(&user_functions, main_idx, &string_table)
 }
 
 // =============================================================================
 // モジュールのバイト列書き出し
 // =============================================================================
 
-fn write_module(functions: &[FunctionInfo], main_idx: u32) -> Vec<u8> {
+fn write_module(functions: &[FunctionInfo], main_idx: u32, strings: &StringTable) -> Vec<u8> {
     let mut out = Vec::new();
 
     // マジック + バージョン
@@ -341,6 +384,14 @@ fn write_module(functions: &[FunctionInfo], main_idx: u32) -> Vec<u8> {
         encode_uleb128(i as u64, &mut func_section);
     }
     write_section(SECTION_FUNCTION, &func_section, &mut out);
+
+    // --- Memory Section: 1 ページ (64KB) を確保 ---
+    // 文字列を持つ可能性があるので常に宣言しておく
+    let mut memory_section = Vec::new();
+    encode_uleb128(1, &mut memory_section); // メモリ数: 1
+    memory_section.push(0x00); // flags: 上限なし
+    encode_uleb128(1, &mut memory_section); // 最小ページ数: 1
+    write_section(SECTION_MEMORY, &memory_section, &mut out);
 
     // --- Export Section: main だけ export ---
     let mut export_section = Vec::new();
@@ -372,7 +423,81 @@ fn write_module(functions: &[FunctionInfo], main_idx: u32) -> Vec<u8> {
     }
     write_section(SECTION_CODE, &code_section, &mut out);
 
+    // --- Data Section: 文字列リテラルをメモリに初期化 ---
+    if !strings.entries.is_empty() {
+        let mut data_section = Vec::new();
+        encode_uleb128(strings.entries.len() as u64, &mut data_section);
+        for (offset, bytes) in &strings.entries {
+            data_section.push(0x00); // mode: active, メモリ index 0
+            // オフセット式: i32.const <offset> + end
+            data_section.push(OP_I32_CONST);
+            encode_sleb128(*offset as i64, &mut data_section);
+            data_section.push(OP_END);
+            // バイト列本体
+            encode_uleb128(bytes.len() as u64, &mut data_section);
+            data_section.extend_from_slice(bytes);
+        }
+        write_section(SECTION_DATA, &data_section, &mut out);
+    }
+
     out
+}
+
+// =============================================================================
+// 文字列リテラルの事前収集
+// =============================================================================
+
+/// 文の AST を歩いて、含まれる文字列リテラルをすべて `table` に登録する。
+fn collect_strings_stmt(stmt: &Statement, table: &mut StringTable) {
+    match stmt {
+        Statement::ConstDeclaration { init, .. } => collect_strings_expr(init, table),
+        Statement::Return { argument: Some(e) } => collect_strings_expr(e, table),
+        Statement::Return { argument: None } => {}
+    }
+}
+
+/// 式の AST を歩いて、含まれる文字列リテラルをすべて `table` に登録する。
+fn collect_strings_expr(expr: &Expression, table: &mut StringTable) {
+    match expr {
+        Expression::String(s) => {
+            table.intern(s);
+        }
+        Expression::Binary { left, right, .. } => {
+            collect_strings_expr(left, table);
+            collect_strings_expr(right, table);
+        }
+        Expression::Conditional {
+            test,
+            consequent,
+            alternate,
+        } => {
+            collect_strings_expr(test, table);
+            collect_strings_expr(consequent, table);
+            collect_strings_expr(alternate, table);
+        }
+        Expression::Call { callee, arguments } => {
+            collect_strings_expr(callee, table);
+            for a in arguments {
+                collect_strings_expr(a, table);
+            }
+        }
+        Expression::Array(elements) => {
+            for e in elements {
+                collect_strings_expr(e, table);
+            }
+        }
+        Expression::Member { object, index } => {
+            collect_strings_expr(object, table);
+            collect_strings_expr(index, table);
+        }
+        Expression::ArrowFunction { body, .. } => {
+            for s in body {
+                collect_strings_stmt(s, table);
+            }
+        }
+        // リテラル・識別子は収集対象なし
+        Expression::Number(_) | Expression::Boolean(_) | Expression::Identifier(_) => {}
+    }
 }
 
 // =============================================================================
@@ -422,6 +547,16 @@ fn emit_expression(expr: &Expression, fb: &mut FunctionBuilder) {
             // i32.const + SLEB128 (0 or 1)
             fb.code.push(OP_I32_CONST);
             encode_sleb128(if *b { 1 } else { 0 }, &mut fb.code);
+        }
+        Expression::String(s) => {
+            // 文字列は事前収集でメモリに置かれた offset (i32 ポインタ) で表現
+            let offset = fb
+                .string_offsets
+                .get(s)
+                .copied()
+                .unwrap_or_else(|| panic!("string not in table: {s:?}"));
+            fb.code.push(OP_I32_CONST);
+            encode_sleb128(offset as i64, &mut fb.code);
         }
         Expression::Identifier(name) => {
             // ローカルから取り出してスタックに積む
@@ -498,6 +633,7 @@ fn wasm_type_from_annotation(ta: &TypeAnnotation) -> u8 {
 fn infer_simple_type(expr: &Expression) -> u8 {
     match expr {
         Expression::Boolean(_) => TYPE_I32,
+        Expression::String(_) => TYPE_I32, // 文字列はポインタなので i32
         _ => TYPE_F64,
     }
 }
@@ -727,6 +863,45 @@ mod tests {
         let ops = collect_ops(&bytes);
         assert!(ops.iter().any(|op| matches!(op, wasmparser::Operator::If { .. })));
         assert!(ops.iter().any(|op| matches!(op, wasmparser::Operator::Else)));
+    }
+
+    #[test]
+    fn compile_string_literal() {
+        let stmts = crate::compile(r#"const s = "hi";"#);
+        let bytes = compile_to_wasm(&stmts);
+
+        let parser = wasmparser::Parser::new(0);
+        let mut has_memory = false;
+        let mut data_segments = 0;
+
+        for payload in parser.parse_all(&bytes) {
+            match payload.unwrap() {
+                wasmparser::Payload::MemorySection(reader) => {
+                    has_memory = reader.count() > 0;
+                }
+                wasmparser::Payload::DataSection(reader) => {
+                    data_segments = reader.count();
+                }
+                _ => {}
+            }
+        }
+
+        assert!(has_memory, "should declare memory");
+        assert_eq!(data_segments, 1, "should have 1 data segment");
+    }
+
+    #[test]
+    fn compile_repeated_strings_share_offset() {
+        // 同じ内容なら同じオフセットを使う (intern)
+        let stmts = crate::compile(r#"const a = "hi"; const b = "hi";"#);
+        let bytes = compile_to_wasm(&stmts);
+
+        let parser = wasmparser::Parser::new(0);
+        for payload in parser.parse_all(&bytes) {
+            if let wasmparser::Payload::DataSection(reader) = payload.unwrap() {
+                assert_eq!(reader.count(), 1, "should reuse the same string");
+            }
+        }
     }
 
     #[test]
