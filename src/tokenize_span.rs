@@ -4,6 +4,15 @@ pub struct Span {
     pub end: usize,
 }
 
+impl Span {
+    pub fn merge(self, other: Span) -> Span {
+        Span {
+            start: self.start.min(other.start),
+            end: self.end.max(other.end),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
     // Keywords
@@ -371,4 +380,34 @@ pub fn tokenize_span(src: &str) -> Vec<Token> {
         },
     });
     tokens
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn span_of_single_token() {
+        let toks = tokenize_span("const");
+        assert_eq!(toks[0].kind, TokenKind::Const);
+        assert_eq!(toks[0].span, Span { start: 0, end: 5 });
+    }
+
+    #[test]
+    fn span_of_two_tokens() {
+        // "const x"
+        //  0     6
+        let toks = tokenize_span("const x");
+        assert_eq!(toks[0].span, Span { start: 0, end: 5 }); // const
+        assert_eq!(toks[1].span, Span { start: 6, end: 7 }); // x
+    }
+
+    #[test]
+    fn span_of_string_includes_quotes() {
+        // "\"hi\""
+        //  0   4
+        let toks = tokenize_span("\"hi\"");
+        assert_eq!(toks[0].kind, TokenKind::StringLit("hi".to_string()));
+        assert_eq!(toks[0].span, Span { start: 0, end: 4 });
+    }
 }

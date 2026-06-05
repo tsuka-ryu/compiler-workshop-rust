@@ -66,6 +66,31 @@ pub enum Expression {
     },
 }
 
+impl Statement {
+    pub fn span(&self) -> Span {
+        match self {
+            Statement::ConstDeclaration { span, .. } | Statement::Return { span, .. } => *span,
+        }
+    }
+}
+
+impl Expression {
+    pub fn span(&self) -> Span {
+        match self {
+            Expression::Number { span, .. }
+            | Expression::String { span, .. }
+            | Expression::Boolean { span, .. }
+            | Expression::Identifier { span, .. }
+            | Expression::Binary { span, .. }
+            | Expression::Conditional { span, .. }
+            | Expression::Call { span, .. }
+            | Expression::Array { span, .. }
+            | Expression::Member { span, .. }
+            | Expression::ArrowFunction { span, .. } => *span,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum BinaryOp {
     Add,
@@ -94,4 +119,14 @@ pub enum TypeAnnotation {
         return_type: Box<TypeAnnotation>,
         span: Span,
     },
+}
+
+impl TypeAnnotation {
+    pub fn span(&self) -> Span {
+        match self {
+            TypeAnnotation::Named { span, .. }
+            | TypeAnnotation::Array { span, .. }
+            | TypeAnnotation::Function { span, .. } => *span,
+        }
+    }
 }
