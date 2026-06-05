@@ -1,9 +1,12 @@
 use crate::tokenize::tokenize;
 
+pub mod ast_span;
 pub mod monomorphize;
 pub mod naming;
 pub mod parse;
+pub mod parse_span;
 pub mod tokenize;
+pub mod tokenize_span;
 pub mod typecheck;
 pub mod typecheck_mono;
 pub mod wasm;
