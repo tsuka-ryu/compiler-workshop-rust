@@ -95,60 +95,158 @@ pub fn tokenize_span(src: &str) -> Vec<Token> {
                 });
             }
             '?' => {
+                let start = chars.peek().unwrap().0;
                 chars.next();
-                tokens.push(Token::Ternary);
+                tokens.push(Token {
+                    kind: TokenKind::Ternary,
+                    span: Span {
+                        start,
+                        end: start + 1,
+                    },
+                });
             }
             ':' => {
+                let start = chars.peek().unwrap().0;
                 chars.next();
-                tokens.push(Token::Colon);
+                tokens.push(Token {
+                    kind: TokenKind::Colon,
+                    span: Span {
+                        start,
+                        end: start + 1,
+                    },
+                });
             }
             '|' => {
+                let start = chars.peek().unwrap().0;
                 chars.next();
-                tokens.push(Token::Pipe);
+                tokens.push(Token {
+                    kind: TokenKind::Pipe,
+                    span: Span {
+                        start,
+                        end: start + 1,
+                    },
+                });
             }
             '<' => {
+                let start = chars.peek().unwrap().0;
                 chars.next();
-                tokens.push(Token::LessThan);
+                tokens.push(Token {
+                    kind: TokenKind::LessThan,
+                    span: Span {
+                        start,
+                        end: start + 1,
+                    },
+                });
             }
             '>' => {
+                let start = chars.peek().unwrap().0;
                 chars.next();
-                tokens.push(Token::GreaterThan);
+                tokens.push(Token {
+                    kind: TokenKind::GreaterThan,
+                    span: Span {
+                        start,
+                        end: start + 1,
+                    },
+                });
             }
             '*' => {
+                let start = chars.peek().unwrap().0;
                 chars.next();
-                tokens.push(Token::Multiply);
+                tokens.push(Token {
+                    kind: TokenKind::Multiply,
+                    span: Span {
+                        start,
+                        end: start + 1,
+                    },
+                });
             }
             '+' => {
+                let start = chars.peek().unwrap().0;
                 chars.next();
-                tokens.push(Token::Plus);
+                tokens.push(Token {
+                    kind: TokenKind::Plus,
+                    span: Span {
+                        start,
+                        end: start + 1,
+                    },
+                });
             }
             ',' => {
+                let start = chars.peek().unwrap().0;
                 chars.next();
-                tokens.push(Token::Comma);
+                tokens.push(Token {
+                    kind: TokenKind::Comma,
+                    span: Span {
+                        start,
+                        end: start + 1,
+                    },
+                });
             }
             '(' => {
+                let start = chars.peek().unwrap().0;
                 chars.next();
-                tokens.push(Token::LParen);
+                tokens.push(Token {
+                    kind: TokenKind::LParen,
+                    span: Span {
+                        start,
+                        end: start + 1,
+                    },
+                });
             }
             ')' => {
+                let start = chars.peek().unwrap().0;
                 chars.next();
-                tokens.push(Token::RParen);
+                tokens.push(Token {
+                    kind: TokenKind::RParen,
+                    span: Span {
+                        start,
+                        end: start + 1,
+                    },
+                });
             }
             '{' => {
+                let start = chars.peek().unwrap().0;
                 chars.next();
-                tokens.push(Token::LCurly);
+                tokens.push(Token {
+                    kind: TokenKind::LCurly,
+                    span: Span {
+                        start,
+                        end: start + 1,
+                    },
+                });
             }
             '}' => {
+                let start = chars.peek().unwrap().0;
                 chars.next();
-                tokens.push(Token::RCurly);
+                tokens.push(Token {
+                    kind: TokenKind::RCurly,
+                    span: Span {
+                        start,
+                        end: start + 1,
+                    },
+                });
             }
             '[' => {
+                let start = chars.peek().unwrap().0;
                 chars.next();
-                tokens.push(Token::LBracket);
+                tokens.push(Token {
+                    kind: TokenKind::LBracket,
+                    span: Span {
+                        start,
+                        end: start + 1,
+                    },
+                });
             }
             ']' => {
+                let start = chars.peek().unwrap().0;
                 chars.next();
-                tokens.push(Token::RBracket);
+                tokens.push(Token {
+                    kind: TokenKind::RBracket,
+                    span: Span {
+                        start,
+                        end: start + 1,
+                    },
+                });
             }
             '0'..='9' => {
                 let start = chars.peek().unwrap().0;
@@ -179,24 +277,27 @@ pub fn tokenize_span(src: &str) -> Vec<Token> {
                     }
                 }
                 let word = &src[start..end];
-                let token = match word {
-                    "const" => Token::Const,
-                    "return" => Token::Return,
-                    "true" => Token::Boolean(true),
-                    "false" => Token::Boolean(false),
-                    "number" => Token::TypeNumber,
-                    "string" => Token::TypeString,
-                    "boolean" => Token::TypeBoolean,
-                    "Array" => Token::TypeArray,
-                    "void" => Token::TypeVoid,
-                    "Void" => Token::TypeInt,
-                    "Float" => Token::TypeFloat,
-                    "Bool" => Token::TypeBool,
-                    "Unit" => Token::TypeUnit,
+                let kind = match word {
+                    "const" => TokenKind::Const,
+                    "return" => TokenKind::Return,
+                    "true" => TokenKind::Boolean(true),
+                    "false" => TokenKind::Boolean(false),
+                    "number" => TokenKind::TypeNumber,
+                    "string" => TokenKind::TypeString,
+                    "boolean" => TokenKind::TypeBoolean,
+                    "Array" => TokenKind::TypeArray,
+                    "void" => TokenKind::TypeVoid,
+                    "Void" => TokenKind::TypeInt,
+                    "Float" => TokenKind::TypeFloat,
+                    "Bool" => TokenKind::TypeBool,
+                    "Unit" => TokenKind::TypeUnit,
 
-                    _ => Token::Ident(word.to_string()),
+                    _ => TokenKind::Ident(word.to_string()),
                 };
-                tokens.push(token);
+                tokens.push(Token {
+                    kind,
+                    span: Span { start, end },
+                });
             }
             '"' | '\'' => {
                 let quote_start = chars.peek().unwrap().0;
