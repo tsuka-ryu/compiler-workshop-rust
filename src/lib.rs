@@ -9,6 +9,7 @@ pub mod parse_result;
 pub mod parse_span;
 pub mod tokenize;
 pub mod tokenize_span;
+pub mod traverse_binary_only;
 pub mod typecheck;
 pub mod typecheck_mono;
 pub mod visit;
