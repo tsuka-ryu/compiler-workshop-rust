@@ -72,26 +72,38 @@ impl Parser {
         false
     }
 
-    fn parse_statement(&mut self) -> Statement {
+    fn parse_statement(&mut self) -> ParseResult<Statement> {
         match self.peek().kind {
             TokenKind::Const => self.parse_const_declaration(),
             TokenKind::Return => self.parse_return_statement(),
-            _ => panic!("Unexpected token: {:?}", self.peek()),
+            _ => {
+                let tok = self.peek();
+                Err(ParseError {
+                    message: format!("Unexpected token: {:?}", tok.kind),
+                    span: tok.span,
+                })
+            }
         }
     }
-    fn parse_const_declaration(&mut self) -> Statement {
+    fn parse_const_declaration(&mut self) -> ParseResult<Statement> {
         let start_span = self.advance().span;
 
         let ident_tok = self.advance();
+        let ident_span = ident_tok.span;
         let name = match ident_tok.kind {
             TokenKind::Ident(s) => s,
-            other => panic!("Expected identifier, got {other:?}"),
+            other => {
+                return Err(ParseError {
+                    message: format!("Expected identifier, got {other:?}"),
+                    span: ident_span,
+                });
+            }
         };
 
         // : 型があれば読む
         let type_annotation = if matches!(self.peek().kind, TokenKind::Colon) {
             self.advance(); // : を消費
-            Some(self.parse_type_annotation())
+            Some(self.parse_type_annotation()?)
         } else {
             None
         };
@@ -100,11 +112,16 @@ impl Parser {
         let eq_tok = self.advance();
         match eq_tok.kind {
             TokenKind::Eq => {}
-            other => panic!("Expected '=', got {other:?}"),
+            other => {
+                return Err(ParseError {
+                    message: format!("Expected '=', got {other:?}"),
+                    span: eq_tok.span,
+                });
+            }
         }
 
         // 初期化式
-        let init = self.parse_expression();
+        let init = self.parse_expression()?;
 
         // 末尾の;があれば消費
         let end_span = if matches!(self.peek().kind, TokenKind::Semicolon) {
@@ -113,15 +130,15 @@ impl Parser {
             init.span()
         };
 
-        Statement::ConstDeclaration {
+        Ok(Statement::ConstDeclaration {
             name,
             type_annotation,
             init,
             span: start_span.merge(end_span),
-        }
+        })
     }
 
-    fn parse_return_statement(&mut self) -> Statement {
+    fn parse_return_statement(&mut self) -> ParseResult<Statement> {
         let start_span = self.advance().span; // return
 
         let argument = if matches!(
@@ -130,7 +147,7 @@ impl Parser {
         ) {
             None
         } else {
-            Some(self.parse_expression())
+            Some(self.parse_expression()?)
         };
 
         let end_span = if matches!(self.peek().kind, TokenKind::Semicolon) {
@@ -141,35 +158,40 @@ impl Parser {
             start_span
         };
 
-        Statement::Return {
+        Ok(Statement::Return {
             argument,
             span: start_span.merge(end_span),
-        }
+        })
     }
 
-    fn parse_expression(&mut self) -> Expression {
-        let test = self.parse_binary().unwrap();
+    fn parse_expression(&mut self) -> ParseResult<Expression> {
+        let test = self.parse_binary()?;
 
         if matches!(self.peek().kind, TokenKind::Ternary) {
             self.advance(); // ?
-            let consequent = self.parse_expression();
+            let consequent = self.parse_expression()?;
 
             let colon_tok = self.advance();
             match colon_tok.kind {
                 TokenKind::Colon => {}
-                other => panic!("Expected ':' in ternary, got {other:?}"),
+                other => {
+                    return Err(ParseError {
+                        message: format!("Expected ':' in ternary, got {other:?}"),
+                        span: colon_tok.span,
+                    });
+                }
             }
 
-            let alternate = self.parse_expression();
+            let alternate = self.parse_expression()?;
             let span = test.span().merge(alternate.span());
-            Expression::Conditional {
+            Ok(Expression::Conditional {
                 test: Box::new(test),
                 consequent: Box::new(consequent),
                 alternate: Box::new(alternate),
                 span,
-            }
+            })
         } else {
-            test
+            Ok(test)
         }
     }
 
@@ -216,12 +238,12 @@ impl Parser {
                 name,
                 span: tok_span,
             },
-            TokenKind::LBracket => self.parse_array(tok_span),
+            TokenKind::LBracket => self.parse_array(tok_span)?,
             TokenKind::LParen => {
                 if self.looks_like_arrow_fn() {
-                    self.parse_arrow_function(tok_span)
+                    self.parse_arrow_function(tok_span)?
                 } else {
-                    let inner = self.parse_expression();
+                    let inner = self.parse_expression()?;
                     let rparen = self.advance();
                     match rparen.kind {
                         TokenKind::RParen => {}
@@ -247,11 +269,11 @@ impl Parser {
         loop {
             match &self.peek().kind {
                 TokenKind::LParen => {
-                    expr = self.parse_call(expr);
+                    expr = self.parse_call(expr)?;
                 }
                 TokenKind::LBracket => {
                     self.advance();
-                    let index = self.parse_expression();
+                    let index = self.parse_expression()?;
                     let rbracket = self.advance();
                     match rbracket.kind {
                         TokenKind::RBracket => {}
@@ -276,14 +298,14 @@ impl Parser {
         Ok(expr)
     }
 
-    fn parse_call(&mut self, callee: Expression) -> Expression {
+    fn parse_call(&mut self, callee: Expression) -> ParseResult<Expression> {
         self.advance(); // (
 
         let mut arguments = Vec::new();
 
         if !matches!(self.peek().kind, TokenKind::RParen) {
             loop {
-                arguments.push(self.parse_expression());
+                arguments.push(self.parse_expression()?);
                 if matches!(self.peek().kind, TokenKind::Comma) {
                     self.advance();
                 } else {
@@ -295,23 +317,28 @@ impl Parser {
         let rparen = self.advance();
         match rparen.kind {
             TokenKind::RParen => {}
-            other => panic!("Expected ')', got {other:?}"),
+            other => {
+                return Err(ParseError {
+                    message: format!("Expected ')', got {other:?}"),
+                    span: rparen.span,
+                });
+            }
         }
 
         let span = callee.span().merge(rparen.span);
-        Expression::Call {
+        Ok(Expression::Call {
             callee: Box::new(callee),
             arguments,
             span,
-        }
+        })
     }
 
-    fn parse_array(&mut self, lbracket_span: Span) -> Expression {
+    fn parse_array(&mut self, lbracket_span: Span) -> ParseResult<Expression> {
         let mut elements = Vec::new();
 
         if !matches!(self.peek().kind, TokenKind::RBracket) {
             loop {
-                elements.push(self.parse_expression());
+                elements.push(self.parse_expression()?);
                 if matches!(self.peek().kind, TokenKind::Comma) {
                     self.advance();
                 } else {
@@ -323,16 +350,21 @@ impl Parser {
         let rbracket = self.advance();
         match rbracket.kind {
             TokenKind::RBracket => {}
-            other => panic!("Expected ']', got {other:?}"),
+            other => {
+                return Err(ParseError {
+                    message: format!("Expected ']', got {other:?}"),
+                    span: rbracket.span,
+                });
+            }
         }
 
-        Expression::Array {
+        Ok(Expression::Array {
             elements,
             span: lbracket_span.merge(rbracket.span),
-        }
+        })
     }
 
-    fn parse_arrow_function(&mut self, lparen_span: Span) -> Expression {
+    fn parse_arrow_function(&mut self, lparen_span: Span) -> ParseResult<Expression> {
         let mut params = Vec::new();
 
         if !matches!(self.peek().kind, TokenKind::RParen) {
@@ -341,13 +373,18 @@ impl Parser {
                 let name_span = name_tok.span;
                 let name = match name_tok.kind {
                     TokenKind::Ident(s) => s,
-                    other => panic!("Expected param name, got {other:?}"),
+                    other => {
+                        return Err(ParseError {
+                            message: format!("Expected param name, got {other:?}"),
+                            span: name_span,
+                        });
+                    }
                 };
 
                 let (type_annotation, param_end_span) =
                     if matches!(self.peek().kind, TokenKind::Colon) {
                         self.advance();
-                        let ty = self.parse_type_annotation();
+                        let ty = self.parse_type_annotation()?;
                         let ty_span = ty.span();
                         (Some(ty), ty_span)
                     } else {
@@ -371,12 +408,17 @@ impl Parser {
         let rparen = self.advance();
         match rparen.kind {
             TokenKind::RParen => {}
-            other => panic!("Expected ')', got {other:?}"),
+            other => {
+                return Err(ParseError {
+                    message: format!("Expected ')', got {other:?}"),
+                    span: rparen.span,
+                });
+            }
         }
 
         let return_type = if matches!(self.peek().kind, TokenKind::Colon) {
             self.advance();
-            Some(self.parse_type_annotation())
+            Some(self.parse_type_annotation()?)
         } else {
             None
         };
@@ -384,31 +426,41 @@ impl Parser {
         let arrow_tok = self.advance();
         match arrow_tok.kind {
             TokenKind::Arrow => {}
-            other => panic!("Expected '=>', got {other:?}"),
+            other => {
+                return Err(ParseError {
+                    message: format!("Expected '=>', got {other:?}"),
+                    span: arrow_tok.span,
+                });
+            }
         }
 
         let lcurly = self.advance();
         match lcurly.kind {
             TokenKind::LCurly => {}
-            other => panic!("Expected '{{', got {other:?}"),
+            other => {
+                return Err(ParseError {
+                    message: format!("Expected '{{', got {other:?}"),
+                    span: lcurly.span,
+                });
+            }
         }
 
         let mut body = Vec::new();
         while !matches!(self.peek().kind, TokenKind::RCurly) {
-            body.push(self.parse_statement());
+            body.push(self.parse_statement()?);
         }
 
         let rcurly = self.advance(); // }
 
-        Expression::ArrowFunction {
+        Ok(Expression::ArrowFunction {
             params,
             return_type,
             body,
             span: lparen_span.merge(rcurly.span),
-        }
+        })
     }
 
-    fn parse_type_annotation(&mut self) -> TypeAnnotation {
+    fn parse_type_annotation(&mut self) -> ParseResult<TypeAnnotation> {
         let tok = self.advance();
         let start_span = tok.span;
         let base = match tok.kind {
@@ -447,16 +499,21 @@ impl Parser {
             TokenKind::TypeArray => {
                 if matches!(self.peek().kind, TokenKind::LessThan) {
                     self.advance(); // <
-                    let elem = self.parse_type_annotation();
+                    let elem = self.parse_type_annotation()?;
                     let gt = self.advance();
                     match gt.kind {
                         TokenKind::GreaterThan => {}
-                        other => panic!("Expected '>', got {other:?}"),
+                        other => {
+                            return Err(ParseError {
+                                message: format!("Expected '>', got {other:?}"),
+                                span: gt.span,
+                            });
+                        }
                     }
-                    return TypeAnnotation::Array {
+                    return Ok(TypeAnnotation::Array {
                         element: Box::new(elem),
                         span: start_span.merge(gt.span),
-                    };
+                    });
                 }
                 TypeAnnotation::Named {
                     name: "Array".to_string(),
@@ -467,7 +524,12 @@ impl Parser {
                 name,
                 span: start_span,
             },
-            other => panic!("Expected type annotation, got {other:?}"),
+            other => {
+                return Err(ParseError {
+                    message: format!("Expected type annotation, got {other:?}"),
+                    span: start_span,
+                });
+            }
         };
 
         // 後置 T[]
@@ -476,26 +538,31 @@ impl Parser {
             let rbracket = self.advance();
             match rbracket.kind {
                 TokenKind::RBracket => {}
-                other => panic!("Expected ']' in array type, got {other:?}"),
+                other => {
+                    return Err(ParseError {
+                        message: format!("Expected ']' in array type, got {other:?}"),
+                        span: rbracket.span,
+                    });
+                }
             }
             let base_span = base.span();
-            return TypeAnnotation::Array {
+            return Ok(TypeAnnotation::Array {
                 element: Box::new(base),
                 span: base_span.merge(rbracket.span),
-            };
+            });
         }
 
-        base
+        Ok(base)
     }
 }
 
-pub fn parse_span(tokens: Vec<Token>) -> Vec<Statement> {
+pub fn parse_result(tokens: Vec<Token>) -> ParseResult<Vec<Statement>> {
     let mut parser = Parser { tokens, pos: 0 };
     let mut statements = Vec::new();
     while !parser.at_end() {
-        statements.push(parser.parse_statement());
+        statements.push(parser.parse_statement()?);
     }
-    statements
+    Ok(statements)
 }
 
 #[cfg(test)]
@@ -507,7 +574,7 @@ mod tests {
     fn const_decl_span_covers_whole_statement() {
         // "const x = 5;"
         //  0          12
-        let stmts = parse_span(tokenize_span("const x = 5;"));
+        let stmts = parse_result(tokenize_span("const x = 5;")).unwrap();
         assert_eq!(stmts[0].span(), Span { start: 0, end: 12 });
     }
 
@@ -515,11 +582,23 @@ mod tests {
     fn binary_span_covers_both_operands() {
         // "const x = 1 + 2;"
         //           10  14
-        let stmts = parse_span(tokenize_span("const x = 1 + 2;"));
+        let stmts = parse_result(tokenize_span("const x = 1 + 2;")).unwrap();
         if let Statement::ConstDeclaration { init, .. } = &stmts[0] {
             assert_eq!(init.span(), Span { start: 10, end: 15 });
         } else {
             panic!("expected ConstDeclaration");
         }
+    }
+
+    #[test]
+    fn missing_equals_returns_error() {
+        let err = parse_result(tokenize_span("const x 5;")).unwrap_err();
+        assert!(err.message.contains("Expected '='"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn unclosed_paren_returns_error() {
+        let err = parse_result(tokenize_span("const x = (1 + 2;")).unwrap_err();
+        assert!(err.message.contains("Expected ')'"), "got: {}", err.message);
     }
 }
