@@ -148,7 +148,7 @@ impl Parser {
     }
 
     fn parse_expression(&mut self) -> Expression {
-        let test = self.parse_binary();
+        let test = self.parse_binary().unwrap();
 
         if matches!(self.peek().kind, TokenKind::Ternary) {
             self.advance(); // ?
@@ -173,8 +173,8 @@ impl Parser {
         }
     }
 
-    fn parse_binary(&mut self) -> Expression {
-        let mut left = self.parse_primary().unwrap();
+    fn parse_binary(&mut self) -> ParseResult<Expression> {
+        let mut left = self.parse_primary()?;
 
         loop {
             let op = match &self.peek().kind {
@@ -183,7 +183,7 @@ impl Parser {
                 _ => break,
             };
             self.advance();
-            let right = self.parse_primary().unwrap();
+            let right = self.parse_primary()?;
             let span = left.span().merge(right.span());
             left = Expression::Binary {
                 left: Box::new(left),
@@ -193,7 +193,7 @@ impl Parser {
             };
         }
 
-        left
+        Ok(left)
     }
 
     fn parse_primary(&mut self) -> ParseResult<Expression> {
