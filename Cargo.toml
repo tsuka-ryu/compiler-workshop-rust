@@ -8,3 +8,4 @@ codespan-reporting = "0.11"
 
 [dev-dependencies]
 wasmparser = "0.251"
+insta = "1" 

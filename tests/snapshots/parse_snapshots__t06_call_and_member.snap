@@ -1,0 +1,56 @@
+---
+source: tests/parse_snapshots.rs
+expression: stmts
+---
+[
+    ConstDeclaration {
+        name: "y",
+        type_annotation: None,
+        init: Member {
+            object: Call {
+                callee: Identifier {
+                    name: "f",
+                    span: Span {
+                        start: 10,
+                        end: 11,
+                    },
+                },
+                arguments: [
+                    Identifier {
+                        name: "a",
+                        span: Span {
+                            start: 12,
+                            end: 13,
+                        },
+                    },
+                    Identifier {
+                        name: "b",
+                        span: Span {
+                            start: 15,
+                            end: 16,
+                        },
+                    },
+                ],
+                span: Span {
+                    start: 10,
+                    end: 17,
+                },
+            },
+            index: Number {
+                value: 0,
+                span: Span {
+                    start: 18,
+                    end: 19,
+                },
+            },
+            span: Span {
+                start: 10,
+                end: 20,
+            },
+        },
+        span: Span {
+            start: 0,
+            end: 21,
+        },
+    },
+]
