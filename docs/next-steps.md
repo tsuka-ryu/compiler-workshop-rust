@@ -192,13 +192,15 @@ error: expected ';'
 
 ## 5. Visit / Traverse パターン
 
-新規ファイル: `src/visit.rs`、`src/visit_mut.rs`
+新規ファイル: `src/visit.rs` (✅ 実装済み)、`src/visit_mut.rs` (未着手)
 
 ねらい: AST を走査する抽象を独立 trait として切り出す。Linter / Formatter / Transformer の共通基盤。oxc では [`oxc_ast_visit`](https://github.com/oxc-project/oxc/tree/main/crates/oxc_ast_visit) と [`oxc_traverse`](https://github.com/oxc-project/oxc/tree/main/crates/oxc_traverse) が独立 crate になっている。
 
+実装解説は [docs/visit.md](./visit.md) を参照。
+
 ### 最初のステップ
 
-1. immutable visitor を `src/visit.rs` に
+1. ✅ immutable visitor を `src/visit.rs` に
    ```rust
    pub trait Visit {
        fn visit_statement(&mut self, stmt: &Statement) { walk_statement(self, stmt); }
@@ -213,7 +215,7 @@ error: expected ';'
    }
    ```
 2. mutable visitor を `src/visit_mut.rs` に (`&mut Statement` 版)
-3. 試しに「全 Identifier 名を集める」visitor を 1 つ書く
+3. ✅ 試しに「全 Identifier 名を集める」visitor を 1 つ書く (`IdentifierCollector` / `TypeNameCollector`)
 4. (発展) `oxc_traverse` 風に **parent stack** を持つ trait を試す
 
 ### 学習ポイント
@@ -651,7 +653,7 @@ workspace 化しても各 crate の中で `parse.rs` / `parse_pratt.rs` / `parse
 | 2. Result | 30 分 | ✅ 実績 |
 | 3. codespan-reporting | 1 時間 | ✅ 実績 |
 | 4. Snapshot testing (insta) | 30 分〜1 時間 | ✅ 実績 |
-| 5. Visit/Traverse | 2〜3 時間 | |
+| 5. Visit/Traverse | 2〜3 時間 | ✅ Visit のみ (VisitMut / parent stack 未着手) |
 | 6. Pratt parser | 2〜4 時間 | |
 | 7. Resilient parsing | 半日〜1 日 | sync set の調整次第 |
 | 8. Arena allocator (実装) | 1 日〜2 日 | `'a` の伝染と格闘 |
