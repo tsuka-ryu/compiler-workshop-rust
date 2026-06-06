@@ -1,4 +1,19 @@
-fn main() {}
+use compiler_workshop::diagnostics::emit_parse_error;
+use compiler_workshop::parse_result::parse_result;
+use compiler_workshop::tokenize_span::tokenize_span;
+
+fn main() {
+    let source = "const x = (1 + 2;";
+
+    match parse_result(tokenize_span(source)) {
+        Ok(stmts) => {
+            println!("parsed {} statements", stmts.len());
+        }
+        Err(err) => {
+            emit_parse_error(source, &err);
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
