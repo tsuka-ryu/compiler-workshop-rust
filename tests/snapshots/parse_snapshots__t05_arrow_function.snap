@@ -1,0 +1,78 @@
+---
+source: tests/parse_snapshots.rs
+expression: stmts
+---
+[
+    ConstDeclaration {
+        name: "f",
+        type_annotation: None,
+        init: ArrowFunction {
+            params: [
+                Parameter {
+                    name: "x",
+                    type_annotation: Some(
+                        Named {
+                            name: "number",
+                            span: Span {
+                                start: 14,
+                                end: 20,
+                            },
+                        },
+                    ),
+                    span: Span {
+                        start: 11,
+                        end: 20,
+                    },
+                },
+            ],
+            return_type: Some(
+                Named {
+                    name: "number",
+                    span: Span {
+                        start: 23,
+                        end: 29,
+                    },
+                },
+            ),
+            body: [
+                Return {
+                    argument: Some(
+                        Binary {
+                            left: Identifier {
+                                name: "x",
+                                span: Span {
+                                    start: 42,
+                                    end: 43,
+                                },
+                            },
+                            op: Add,
+                            right: Number {
+                                value: 1,
+                                span: Span {
+                                    start: 46,
+                                    end: 47,
+                                },
+                            },
+                            span: Span {
+                                start: 42,
+                                end: 47,
+                            },
+                        },
+                    ),
+                    span: Span {
+                        start: 35,
+                        end: 48,
+                    },
+                },
+            ],
+            span: Span {
+                start: 10,
+                end: 50,
+            },
+        },
+        span: Span {
+            start: 0,
+            end: 51,
+        },
+    },
+]

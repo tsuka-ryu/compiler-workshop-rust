@@ -69,6 +69,37 @@ const b = id_String("hi");
 cargo test
 ```
 
+## Snapshot testing (insta)
+
+parser 系のテストの一部は [insta](https://insta.rs/) で snapshot 化している ([tests/parse_snapshots.rs](tests/parse_snapshots.rs))。
+
+### 初回セットアップ
+
+```sh
+cargo install cargo-insta
+```
+
+### 普段のワークフロー
+
+```sh
+cargo test --test parse_snapshots   # snapshot と差分があれば fail する
+cargo insta review                  # TUI で diff を確認: a で承認 / r で却下 / s でスキップ
+```
+
+承認すると `tests/snapshots/*.snap` が更新される (git にコミットする)。
+
+### 新しい snapshot テストを追加するとき
+
+```rust
+insta::assert_debug_snapshot!(value);
+```
+
+を書いて `cargo test` → 初回は `.snap.new` が生成されて fail → `cargo insta review` で承認 → `.snap` 確定。
+
+### AST の構造を意図的に変えたとき
+
+テストが fail する → `cargo insta review` で新しい AST 出力を確認 → 期待通りなら `a` で承認 → snapshot 更新。逆に意図しない変化なら `r` で却下してコードを直す。
+
 ## ドキュメント
 
 - [docs/wasm-plan.md](docs/wasm-plan.md) — wasm 生成と monomorphization の設計方針
