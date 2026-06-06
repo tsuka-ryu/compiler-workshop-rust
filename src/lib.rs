@@ -12,6 +12,7 @@ pub mod tokenize_span;
 pub mod typecheck;
 pub mod typecheck_mono;
 pub mod visit;
+pub mod visit_mut;
 pub mod wasm;
 
 pub struct CompileResult {
