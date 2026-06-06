@@ -27,9 +27,48 @@ pub enum Ancestor<'a> {
 ///   「この struct は `&'a Expression` を借りているのと同じ寿命制約を持つ」と表明する。
 ///   `'a` がどのフィールドにも現れないと `parameter 'a is never used` エラーになるため、
 ///   それを回避する役割も兼ねる。`_` プレフィックスは「未使用変数だが意図的」のサイン。
+///
+/// # なぜフィールド単位のアクセサだけで、`binary() -> &Expression` を提供しないか
+///
+/// `pub fn binary(&self) -> &Expression` を生やせば呼び出し側で `match` できるが、
+/// それだと `left` も見えてしまう。**「自分の枝に触れない」という不変条件を型で守る**
+/// のがこの設計の肝なので、`op()` / `right()` / `span()` のフィールド単位のアクセサ
+/// だけを提供する。
 pub struct BinaryWithoutLeft<'a> {
     ptr: *const Expression,
     _phantom: PhantomData<&'a Expression>,
+}
+
+impl<'a> BinaryWithoutLeft<'a> {
+    pub fn op(&self) -> &'a BinaryOp {
+        // SAFETY: BinaryWithoutLeft が作られるのは walk が
+        //         Expression::Binary を訪問してる最中だけ。
+        //         この間 ptr は有効な Binary を指していると保証される。
+        unsafe {
+            match &*self.ptr {
+                Expression::Binary { op, .. } => op,
+                _ => unreachable!("BinaryWithoutLeft must point to Binary variant"),
+            }
+        }
+    }
+
+    pub fn right(&self) -> &'a Expression {
+        unsafe {
+            match &*self.ptr {
+                Expression::Binary { right, .. } => right,
+                _ => unreachable!("BinaryWithoutLeft must point to Binary variant"),
+            }
+        }
+    }
+
+    pub fn span(&self) -> Span {
+        unsafe {
+            match &*self.ptr {
+                Expression::Binary { span, .. } => *span,
+                _ => unreachable!("BinaryWithoutLeft must point to Binary variant"),
+            }
+        }
+    }
 }
 
 /// 対称形。Binary 全体を指すが、right は見せない。
@@ -38,8 +77,85 @@ pub struct BinaryWithoutRight<'a> {
     _phantom: PhantomData<&'a Expression>,
 }
 
+impl<'a> BinaryWithoutRight<'a> {
+    pub fn op(&self) -> &'a BinaryOp {
+        // SAFETY: BinaryWithoutRight が作られるのは walk が
+        //         Expression::Binary を訪問してる最中だけ。
+        //         この間 ptr は有効な Binary を指していると保証される。
+        unsafe {
+            match &*self.ptr {
+                Expression::Binary { op, .. } => op,
+                _ => unreachable!("BinaryWithoutRight must point to Binary variant"),
+            }
+        }
+    }
+
+    pub fn left(&self) -> &'a Expression {
+        unsafe {
+            match &*self.ptr {
+                Expression::Binary { left, .. } => left,
+                _ => unreachable!("BinaryWithoutRight must point to Binary variant"),
+            }
+        }
+    }
+
+    pub fn span(&self) -> Span {
+        unsafe {
+            match &*self.ptr {
+                Expression::Binary { span, .. } => *span,
+                _ => unreachable!("BinaryWithoutRight must point to Binary variant"),
+            }
+        }
+    }
+}
+
 /// walk が降りる間に Ancestor を push/pop していくスタック。
 /// `stack.last()` が「現在の親」。将来 `parent()` / `ancestor(depth)` を生やす。
 pub struct TraverseCtx<'a> {
     stack: Vec<Ancestor<'a>>,
+}
+
+/// VisitMut に「親アクセス」を足した trait。
+///
+/// - `&mut Expression` でノードを書き換えられる (VisitMut と同じ)
+/// - `ctx.parent()` で親を読める (Traverse 特有)
+/// - default は no-op、興味のあるメソッドだけ override する
+/// - `enter_*` は pre-order、`exit_*` は post-order
+pub trait Traverse<'a> {
+    fn enter_expression(&mut self, _expr: &mut Expression, _ctx: &mut TraverseCtx<'a>) {}
+    fn exit_expression(&mut self, _expr: &mut Expression, _ctx: &mut TraverseCtx<'a>) {}
+}
+
+/// AST を pre/post-order に traverse する。3段階の順序は固定:
+/// 1. enter → 2. children → 3. exit
+/// 入れ替えると visitor の規約 (enter=pre-order, exit=post-order) が壊れる。
+/// children の左右順 (left → right) はソース登場順を保つための慣習。
+unsafe fn walk_expression<'a, T: Traverse<'a>>(
+    t: &mut T,
+    ptr: *mut Expression,
+    ctx: &mut TraverseCtx<'a>,
+) {
+    unsafe { t.enter_expression(&mut *ptr, ctx) };
+    match unsafe { &mut *ptr } {
+        Expression::Binary { left, right, .. } => {
+            // left を訪問する間、親は「left を見せない Binary」
+            ctx.stack.push(Ancestor::BinaryLeft(BinaryWithoutLeft {
+                ptr,                   // 親 (Binary) 自身を指すポインタ
+                _phantom: PhantomData, // 'a は推論で stack のものに合う
+            }));
+            unsafe { walk_expression(t, &mut **left as *mut _, ctx) };
+            ctx.stack.pop();
+
+            // right を訪問する間、親は「right を見せない Binary」
+            ctx.stack.push(Ancestor::BinaryRight(BinaryWithoutRight {
+                ptr,                   // 親 (Binary) 自身を指すポインタ
+                _phantom: PhantomData, // 'a は推論で stack のものに合う
+            }));
+            unsafe { walk_expression(t, &mut **right as *mut _, ctx) };
+            ctx.stack.pop();
+        }
+        _ => {} // 葉ノードは何もしない
+    };
+
+    unsafe { t.exit_expression(&mut *ptr, ctx) };
 }
