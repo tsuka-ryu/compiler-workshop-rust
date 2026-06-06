@@ -159,3 +159,77 @@ unsafe fn walk_expression<'a, T: Traverse<'a>>(
 
     unsafe { t.exit_expression(&mut *ptr, ctx) };
 }
+
+impl<'a> TraverseCtx<'a> {
+    pub fn parent(&self) -> &Ancestor<'a> {
+        self.stack
+            .last()
+            .expect("stack always has at least Ancestor::None")
+    }
+}
+
+pub fn traverse_mut<'a, T: Traverse<'a>>(t: &mut T, expr: &'a mut Expression) {
+    let mut ctx = TraverseCtx {
+        stack: vec![Ancestor::None],
+    };
+    unsafe {
+        walk_expression(t, expr as *mut _, &mut ctx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast_span::Statement;
+    use crate::parse_result::parse_result;
+    use crate::tokenize_span::tokenize_span;
+
+    struct SiblingReader {
+        siblings_seen: Vec<String>,
+    }
+
+    impl<'a> Traverse<'a> for SiblingReader {
+        fn enter_expression(&mut self, expr: &mut Expression, ctx: &mut TraverseCtx<'a>) {
+            // 葉ノードを訪問中だけ、親経由で兄弟を覗く
+            let is_leaf = matches!(
+                expr,
+                Expression::Number { .. } | Expression::Identifier { .. }
+            );
+            if !is_leaf {
+                return;
+            }
+            let sibling = match ctx.parent() {
+                Ancestor::None => "no_parent".to_string(),
+                Ancestor::BinaryLeft(p) => format!("right={}", label(p.right())),
+                Ancestor::BinaryRight(p) => format!("left={}", label(p.left())),
+            };
+            self.siblings_seen.push(sibling);
+        }
+    }
+
+    fn label(e: &Expression) -> String {
+        match e {
+            Expression::Number { value, .. } => format!("Number({})", value),
+            Expression::Identifier { name, .. } => format!("Ident({})", name),
+            _ => "Other".to_string(),
+        }
+    }
+
+    #[test]
+    fn reads_sibling_through_parent() {
+        let mut stmts = parse_result(tokenize_span("const r = x + 1;")).unwrap();
+        let Statement::ConstDeclaration { init, .. } = &mut stmts[0] else {
+            panic!("expected ConstDeclaration");
+        };
+
+        let mut reader = SiblingReader {
+            siblings_seen: Vec::new(),
+        };
+        traverse_mut(&mut reader, init);
+
+        assert_eq!(
+            reader.siblings_seen,
+            vec!["right=Number(1)".to_string(), "left=Ident(x)".to_string()],
+        );
+    }
+}
