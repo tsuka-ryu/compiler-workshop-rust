@@ -643,22 +643,24 @@ workspace 化しても各 crate の中で `parse.rs` / `parse_pratt.rs` / `parse
 
 ## 想定スケジュール (目安)
 
-| タスク | 所要 |
-|---|---|
-| 1. Span | 半日〜1 日 |
-| 2. Result | 半日 |
-| 3. codespan-reporting | 半日 |
-| 4. Snapshot testing (insta) | 半日 |
-| 5. Visit/Traverse | 半日 |
-| 6. Pratt parser | 半日〜1 日 |
-| 7. Resilient parsing | 1 日〜数日 |
-| 8. Arena allocator (実装) | 1 日〜数日 (ライフタイム格闘) |
-| 9. String interning (Atom) | 半日 |
-| 10. Index 型 | 半日〜1 日 |
-| 11. Linter | 半日〜1 日 (ルール数しだい) |
-| 12. Transformer | 半日〜1 日 |
-| 13. Formatter (浅め) | 半日〜1 日 |
-| 14. LSP Phase 1 | 数日 (立ち上げ重め) |
-| 15. Workspace 分割 | 半日〜1 日 |
+実績ベース (1〜3) で再校正したもの。「立ち上げ重い」「ライフタイム格闘」など定性的に重い節は強気に潰さず、レンジ上限を残している。
 
-全体で 3 週間〜1.5 ヶ月程度。
+| タスク | 所要 | 状態 |
+|---|---|---|
+| 1. Span | 2 時間 | ✅ 実績 |
+| 2. Result | 30 分 | ✅ 実績 |
+| 3. codespan-reporting | 1 時間 | ✅ 実績 |
+| 4. Snapshot testing (insta) | 30 分〜1 時間 | ✅ 実績 |
+| 5. Visit/Traverse | 2〜3 時間 | |
+| 6. Pratt parser | 2〜4 時間 | |
+| 7. Resilient parsing | 半日〜1 日 | sync set の調整次第 |
+| 8. Arena allocator (実装) | 1 日〜2 日 | `'a` の伝染と格闘 |
+| 9. String interning (Atom) | 2〜3 時間 | 8 が終わっていれば軽い |
+| 10. Index 型 | 3〜4 時間 | |
+| 11. Linter | 3〜4 時間 | ルール数しだい |
+| 12. Transformer | 3〜5 時間 | |
+| 13. Formatter (浅め) | 3〜5 時間 | |
+| 14. LSP Phase 1 | 1〜2 日 | プロトコル立ち上げが重い |
+| 15. Workspace 分割 | 2〜3 時間 | |
+
+残タスクの素直な合計はおよそ **5〜8 日分** (1〜3 と同じペースを前提に、8 / 14 だけ重め)。週末ベースなら 2〜4 週間程度。
