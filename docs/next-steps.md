@@ -186,7 +186,7 @@ error: expected ';'
 ### 読書 TODO
 
 - [ ] [insta README](https://github.com/mitsuhiko/insta)
-- [ ] oxc のテストでどう `insta` が使われているか観察 ([例: oxc_parser/tests](https://github.com/oxc-project/oxc/tree/main/crates/oxc_parser/tests))
+- [ ] oxc のテストでどう `insta` が使われているか観察。ただし **oxc_parser 自体は AST snapshot を取らない**。代わりに [tasks/coverage](https://github.com/oxc-project/oxc/tree/main/tasks/coverage) で test262 等のコーパスに対して走らせ、pass/fail の集計を snapshot で固定している。AST snapshot 方式 (rust-analyzer の `test_data/` 等) と corpus pass/fail 方式 (oxc / swc) という 2 系統がある
 
 ---
 
