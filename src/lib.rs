@@ -4,6 +4,7 @@ pub mod ast_span;
 pub mod monomorphize;
 pub mod naming;
 pub mod parse;
+pub mod parse_result;
 pub mod parse_span;
 pub mod tokenize;
 pub mod tokenize_span;
