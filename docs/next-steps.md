@@ -238,17 +238,20 @@ error: expected ';'
 
 ## 6. Pratt parser
 
-新規ファイル: `src/parse_pratt.rs`
+新規ファイル: `src/parse_pratt.rs` (✅ 実装済み)
 
 ねらい: 既存 recursive descent との対比。同じ AST を別の方法で構築する。**recursive descent 版の `parse.rs` は残したまま**、`parse_pratt.rs` を並置する。
 
+実装解説:
+- Pratt parser (binding power): [docs/parse-pratt.md](./parse-pratt.md)
+
 ### 最初のステップ
 
-1. `pub fn parse_pratt(tokens: Vec<Token>) -> Vec<Statement>` のスケルトン作成
-2. `Statement` のパースは既存 parse.rs と同じ recursive descent で書く (`const` 宣言、`return` 文など)
-3. **`parse_expression` だけ Pratt にする** (ここが本題)
-4. binding power 表 (`infix_bp(&Token) -> Option<(left_bp, right_bp)>`) を用意
-5. 既存テストの一部を `parse_pratt` 用に流用し、同じ結果になることを確認
+1. ✅ `pub fn parse_pratt(tokens: Vec<Token>) -> Vec<Statement>` のスケルトン作成
+2. ✅ `Statement` のパースは既存 parse.rs と同じ recursive descent で書く (`const` 宣言、`return` 文など)
+3. ✅ **`parse_expression` だけ Pratt にする** (ここが本題)
+4. ✅ binding power 表 (`infix_bp(&Token) -> Option<(left_bp, right_bp)>`) を用意。Ternary=(2,1) Plus=(3,4) Multiply=(5,6)
+5. ✅ 既存テストの一部を `parse_pratt` 用に流用し、同じ結果になることを確認 (+ Pratt 固有の優先順位テスト 3 件追加)
 
 ### 実装の核
 
@@ -658,7 +661,7 @@ workspace 化しても各 crate の中で `parse.rs` / `parse_pratt.rs` / `parse
 | 3. codespan-reporting | 1 時間 | ✅ 実績 |
 | 4. Snapshot testing (insta) | 30 分〜1 時間 | ✅ 実績 |
 | 5. Visit/Traverse | 2〜3 時間 | ✅ 実績 (Visit / VisitMut / Traverse 全部) |
-| 6. Pratt parser | 2〜4 時間 | |
+| 6. Pratt parser | 2〜4 時間 | ✅ 実績 |
 | 7. Resilient parsing | 半日〜1 日 | sync set の調整次第 |
 | 8. Arena allocator (実装) | 1 日〜2 日 | `'a` の伝染と格闘 |
 | 9. String interning (Atom) | 2〜3 時間 | 8 が終わっていれば軽い |
