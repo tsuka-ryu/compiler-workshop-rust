@@ -23,12 +23,15 @@ struct Parser {
 
 impl Parser {
     fn peek(&self) -> &Token {
-        &self.tokens[self.pos]
+        // pos が EoF を越えないようクランプ（tokens 末尾は必ず EoFトークン)
+        &self.tokens[self.pos.min(self.tokens.len() - 1)]
     }
 
     fn advance(&mut self) -> Token {
-        let tok = self.tokens[self.pos].clone();
-        self.pos += 1;
+        let tok = self.peek().clone();
+        if self.pos < self.tokens.len() - 1 {
+            self.pos += 1; // EoF より先に進めない
+        }
         tok
     }
 
@@ -70,7 +73,8 @@ impl Parser {
     }
 
     fn advance_to_end(&mut self) {
-        todo!()
+        // oxc の lexer.advance_to_end 相当。EoF トークンを指して全ループを止める。
+        self.pos = self.tokens.len() - 1;
     }
 
     /// 識別子を要求して名前を返す。無ければ fatal をセットして空文字列を返す。
@@ -441,7 +445,7 @@ impl Parser {
         self.expect(&TokenKind::LCurly);
 
         let mut body = Vec::new();
-        while !matches!(self.peek().kind, TokenKind::RCurly) {
+        while !matches!(self.peek().kind, TokenKind::RCurly) && !self.has_fatal_error() {
             body.push(self.parse_statement());
         }
 
