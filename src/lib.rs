@@ -1,5 +1,6 @@
 use crate::tokenize::tokenize;
 
+pub mod ast_arena;
 pub mod ast_resilient;
 pub mod ast_span;
 pub mod diagnostics;
