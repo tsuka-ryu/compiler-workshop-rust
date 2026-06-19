@@ -118,6 +118,15 @@ impl Dummy for Statement {
     }
 }
 
+impl Dummy for TypeAnnotation {
+    fn dummy(span: Span) -> Self {
+        TypeAnnotation::Named {
+            name: String::new(),
+            span,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum BinaryOp {
     Add,

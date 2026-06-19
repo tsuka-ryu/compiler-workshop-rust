@@ -73,6 +73,21 @@ impl Parser {
         todo!()
     }
 
+    /// 識別子を要求して名前を返す。無ければ fatal をセットして空文字列を返す。
+    fn expect_ident(&mut self) -> String {
+        let tok = self.advance();
+        match tok.kind {
+            TokenKind::Ident(s) => s,
+            other => {
+                self.set_fatal_error(ParseError {
+                    message: format!("expected identifier, got {other:?}"),
+                    span: tok.span,
+                });
+                String::new()
+            }
+        }
+    }
+
     fn error(&mut self, error: ParseError) {
         self.errors.push(error)
     }
@@ -165,17 +180,13 @@ impl Parser {
         match self.peek().kind {
             TokenKind::Const => self.parse_const_declaration(),
             TokenKind::Return => self.parse_return_statement(),
-            _ => panic!("Unexpected token: {:?}", self.peek()),
+            _ => self.unexpected(),
         }
     }
     fn parse_const_declaration(&mut self) -> Statement {
         let start_span = self.advance().span;
 
-        let ident_tok = self.advance();
-        let name = match ident_tok.kind {
-            TokenKind::Ident(s) => s,
-            other => panic!("Expected identifier, got {other:?}"),
-        };
+        let name = self.expect_ident();
 
         // : 型があれば読む
         let type_annotation = if matches!(self.peek().kind, TokenKind::Colon) {
@@ -186,11 +197,7 @@ impl Parser {
         };
 
         // =
-        let eq_tok = self.advance();
-        match eq_tok.kind {
-            TokenKind::Eq => {}
-            other => panic!("Expected '=', got {other:?}"),
-        }
+        self.expect(&TokenKind::Eq);
 
         // 初期化式
         let init = self.parse_expression();
@@ -394,12 +401,8 @@ impl Parser {
 
         if !matches!(self.peek().kind, TokenKind::RParen) {
             loop {
-                let name_tok = self.advance();
-                let name_span = name_tok.span;
-                let name = match name_tok.kind {
-                    TokenKind::Ident(s) => s,
-                    other => panic!("Expected param name, got {other:?}"),
-                };
+                let name_span = self.peek().span;
+                let name = self.expect_ident();
 
                 let (type_annotation, param_end_span) =
                     if matches!(self.peek().kind, TokenKind::Colon) {
@@ -425,11 +428,7 @@ impl Parser {
             }
         }
 
-        let rparen = self.advance();
-        match rparen.kind {
-            TokenKind::RParen => {}
-            other => panic!("Expected ')', got {other:?}"),
-        }
+        self.expect(&TokenKind::RParen);
 
         let return_type = if matches!(self.peek().kind, TokenKind::Colon) {
             self.advance();
@@ -438,30 +437,22 @@ impl Parser {
             None
         };
 
-        let arrow_tok = self.advance();
-        match arrow_tok.kind {
-            TokenKind::Arrow => {}
-            other => panic!("Expected '=>', got {other:?}"),
-        }
-
-        let lcurly = self.advance();
-        match lcurly.kind {
-            TokenKind::LCurly => {}
-            other => panic!("Expected '{{', got {other:?}"),
-        }
+        self.expect(&TokenKind::Arrow);
+        self.expect(&TokenKind::LCurly);
 
         let mut body = Vec::new();
         while !matches!(self.peek().kind, TokenKind::RCurly) {
             body.push(self.parse_statement());
         }
 
-        let rcurly = self.advance(); // }
+        let close_span = self.peek().span;
+        self.expect(&TokenKind::RCurly);
 
         Expression::ArrowFunction {
             params,
             return_type,
             body,
-            span: lparen_span.merge(rcurly.span),
+            span: lparen_span.merge(close_span),
         }
     }
 
@@ -505,14 +496,11 @@ impl Parser {
                 if matches!(self.peek().kind, TokenKind::LessThan) {
                     self.advance(); // <
                     let elem = self.parse_type_annotation();
-                    let gt = self.advance();
-                    match gt.kind {
-                        TokenKind::GreaterThan => {}
-                        other => panic!("Expected '>', got {other:?}"),
-                    }
+                    let close_span = self.peek().span;
+                    self.expect(&TokenKind::GreaterThan);
                     return TypeAnnotation::Array {
                         element: Box::new(elem),
-                        span: start_span.merge(gt.span),
+                        span: start_span.merge(close_span),
                     };
                 }
                 TypeAnnotation::Named {
@@ -524,21 +512,23 @@ impl Parser {
                 name,
                 span: start_span,
             },
-            other => panic!("Expected type annotation, got {other:?}"),
+            other => {
+                return self.fatal_error(ParseError {
+                    message: format!("expected type annotation, got {other:?}"),
+                    span: start_span,
+                });
+            }
         };
 
         // 後置 T[]
         if matches!(self.peek().kind, TokenKind::LBracket) {
             self.advance();
-            let rbracket = self.advance();
-            match rbracket.kind {
-                TokenKind::RBracket => {}
-                other => panic!("Expected ']' in array type, got {other:?}"),
-            }
+            let close_span = self.peek().span;
+            self.expect(&TokenKind::RBracket);
             let base_span = base.span();
             return TypeAnnotation::Array {
                 element: Box::new(base),
-                span: base_span.merge(rbracket.span),
+                span: base_span.merge(close_span),
             };
         }
 
