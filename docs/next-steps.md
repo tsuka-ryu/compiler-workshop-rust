@@ -324,7 +324,7 @@ fn parse_expr_bp(&mut self, min_bp: u8) -> Expression {
 
 ---
 
-## 8. Arena allocator (実装ブランチ)
+## 8. Arena allocator 
 
 新規ファイル: `src/ast_arena.rs`、`src/parse_arena.rs`
 
