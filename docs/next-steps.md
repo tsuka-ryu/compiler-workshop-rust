@@ -343,9 +343,10 @@ section 7 の当初案は **matklad / rust-analyzer 流** (sync set でスキッ
 
 ---
 
-## 8. Arena allocator 
+## 8. Arena allocator ✅(実装済み)
 
-新規ファイル: `src/ast_arena.rs`、`src/parse_arena.rs`
+実装ファイル: [`src/ast_arena.rs`](../src/ast_arena.rs)、[`src/parse_arena.rs`](../src/parse_arena.rs)
+解説: [arena-allocator.md](./arena-allocator.md)
 
 ねらい: AST を `Box<T>` ではなく `&'a T` で持つ実装を書き、ライフタイム引数が parser 全体に伝染する感覚を体得する。`'a` の偏在が arena 系 parser を読むときの最大の障壁になるので、読書だけで済ませない。
 
@@ -374,8 +375,10 @@ section 7 の当初案は **matklad / rust-analyzer 流** (sync set でスキッ
    ```rust
    pub fn parse<'a>(bump: &'a Bump, tokens: Vec<Token>) -> Vec<Statement<'a>> { ... }
    ```
-4. **最小スコープで止める**: tokenize / wasm まで通す必要はない。式と const 宣言だけ arena 版で動けば学習目的は達成
+4. tokenize / wasm まで通す必要はない。式と const 宣言が arena 版で動けば学習目的は達成
 5. 既存 `parse.rs` / `ast.rs` 相当は触らない (並置)
+
+> 実際の進め方: span 版 ([`ast_span.rs`](../src/ast_span.rs) / [`parse_span.rs`](../src/parse_span.rs)) をまるごとコピーし、`Box<T>` → `&'a T` と `<'a>` 付与を機械的に適用した。最小版に削るより、全ノードで `'a` の伝染を浴びる方が学習効果が高い。手順と詰まりどころは [arena-allocator.md](./arena-allocator.md) にまとめた。
 
 ### 学習ポイント
 
@@ -682,7 +685,7 @@ workspace 化しても各 crate の中で `parse.rs` / `parse_pratt.rs` / `parse
 | 5. Visit/Traverse | 2〜3 時間 | ✅ 実績 (Visit / VisitMut / Traverse 全部) |
 | 6. Pratt parser | 2〜4 時間 | ✅ 実績 |
 | 7. Resilient parsing | 半日〜1 日 | ✅ 実績 (oxc 忠実: 2 層エラー + Dummy) |
-| 8. Arena allocator (実装) | 1 日〜2 日 | `'a` の伝染と格闘 |
+| 8. Arena allocator (実装) | 1 日〜2 日 | ✅ 実績 (span 版を `&'a` 化、`'a` の伝染を体得) |
 | 9. String interning (Atom) | 2〜3 時間 | 8 が終わっていれば軽い |
 | 10. Index 型 | 3〜4 時間 | |
 | 11. Linter | 3〜4 時間 | ルール数しだい |
