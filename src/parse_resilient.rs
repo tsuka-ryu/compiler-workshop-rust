@@ -53,13 +53,6 @@ impl Parser {
         }
     }
 
-    /// 合致してたら食う（なくても何もしない）
-    fn bump(&mut self, kind: &TokenKind) {
-        if self.at(kind) {
-            self.advance();
-        }
-    }
-
     fn expect(&mut self, kind: &TokenKind) {
         if self.at(kind) {
             self.advance();
@@ -206,10 +199,14 @@ impl Parser {
         // 初期化式
         let init = self.parse_expression();
 
-        // 末尾の;があれば消費
-        let end_span = if matches!(self.peek().kind, TokenKind::Semicolon) {
+        // ; が無ければ recoverable error を積む（木は残す）
+        let end_span = if self.at(&TokenKind::Semicolon) {
             self.advance().span
         } else {
+            self.error(ParseError {
+                message: "expected ';'".to_string(),
+                span: init.span(),
+            });
             init.span()
         };
 
@@ -233,11 +230,20 @@ impl Parser {
             Some(self.parse_expression())
         };
 
-        let end_span = if matches!(self.peek().kind, TokenKind::Semicolon) {
+        // ; が無ければ recoverable error を積む(木は残す)
+        let end_span = if self.at(&TokenKind::Semicolon) {
             self.advance().span
         } else if let Some(arg) = &argument {
+            self.error(ParseError {
+                message: "expected ';'".to_string(),
+                span: arg.span(),
+            });
             arg.span()
         } else {
+            self.error(ParseError {
+                message: "expected ';'".to_string(),
+                span: start_span,
+            });
             start_span
         };
 
@@ -600,5 +606,32 @@ mod tests {
         } else {
             panic!("expected ConstDeclaration");
         }
+    }
+
+    #[test]
+    fn fatal_error_discards_tree_and_sets_panicked() {
+        let ret = parse_resilient(tokenize_span("const x = ;"));
+        assert!(ret.panicked);
+        assert!(ret.statements.is_empty());
+        assert_eq!(ret.errors.len(), 1);
+    }
+
+    #[test]
+    fn recoverable_error_keeps_tree() {
+        let ret = parse_resilient(tokenize_span("const x = 5"));
+        assert!(!ret.panicked);
+        assert_eq!(ret.statements.len(), 1);
+        assert_eq!(ret.errors.len(), 1);
+        assert!(matches!(
+            ret.statements[0],
+            Statement::ConstDeclaration { .. }
+        ));
+    }
+
+    #[test]
+    fn well_formed_input_has_no_errors() {
+        let ret = parse_resilient(tokenize_span("const x = 1 + 2;"));
+        assert!(!ret.panicked);
+        assert!(ret.errors.is_empty());
     }
 }
