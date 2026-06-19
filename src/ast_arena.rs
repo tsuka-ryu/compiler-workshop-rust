@@ -1,21 +1,21 @@
 use crate::tokenize_span::Span;
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Statement {
+pub enum Statement<'a> {
     ConstDeclaration {
         name: String,
-        type_annotation: Option<TypeAnnotation>,
-        init: Expression,
+        type_annotation: Option<TypeAnnotation<'a>>,
+        init: Expression<'a>,
         span: Span,
     },
     Return {
-        argument: Option<Expression>,
+        argument: Option<Expression<'a>>,
         span: Span,
     },
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Expression {
+pub enum Expression<'a> {
     Number {
         value: i64,
         span: Span,
@@ -33,40 +33,40 @@ pub enum Expression {
         span: Span,
     },
     Binary {
-        left: Box<Expression>,
+        left: &'a Expression<'a>,
         op: BinaryOp,
-        right: Box<Expression>,
+        right: &'a Expression<'a>,
         span: Span,
     },
     Conditional {
-        test: Box<Expression>,
-        consequent: Box<Expression>,
-        alternate: Box<Expression>,
+        test: &'a Expression<'a>,
+        consequent: &'a Expression<'a>,
+        alternate: &'a Expression<'a>,
         span: Span,
     },
     Call {
-        callee: Box<Expression>,
-        arguments: Vec<Expression>,
+        callee: &'a Expression<'a>,
+        arguments: Vec<Expression<'a>>,
         span: Span,
     },
     Array {
-        elements: Vec<Expression>,
+        elements: Vec<Expression<'a>>,
         span: Span,
     },
     Member {
-        object: Box<Expression>,
-        index: Box<Expression>,
+        object: &'a Expression<'a>,
+        index: &'a Expression<'a>,
         span: Span,
     },
     ArrowFunction {
-        params: Vec<Parameter>,
-        return_type: Option<TypeAnnotation>,
-        body: Vec<Statement>,
+        params: Vec<Parameter<'a>>,
+        return_type: Option<TypeAnnotation<'a>>,
+        body: Vec<Statement<'a>>,
         span: Span,
     },
 }
 
-impl Statement {
+impl<'a> Statement<'a> {
     pub fn span(&self) -> Span {
         match self {
             Statement::ConstDeclaration { span, .. } | Statement::Return { span, .. } => *span,
@@ -74,7 +74,7 @@ impl Statement {
     }
 }
 
-impl Expression {
+impl<'a> Expression<'a> {
     pub fn span(&self) -> Span {
         match self {
             Expression::Number { span, .. }
@@ -98,30 +98,30 @@ pub enum BinaryOp {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Parameter {
+pub struct Parameter<'a> {
     pub name: String,
-    pub type_annotation: Option<TypeAnnotation>,
+    pub type_annotation: Option<TypeAnnotation<'a>>,
     pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum TypeAnnotation {
+pub enum TypeAnnotation<'a> {
     Named {
         name: String,
         span: Span,
     },
     Array {
-        element: Box<TypeAnnotation>,
+        element: &'a TypeAnnotation<'a>,
         span: Span,
     },
     Function {
-        params: Vec<Parameter>,
-        return_type: Box<TypeAnnotation>,
+        params: Vec<Parameter<'a>>,
+        return_type: &'a TypeAnnotation<'a>,
         span: Span,
     },
 }
 
-impl TypeAnnotation {
+impl<'a> TypeAnnotation<'a> {
     pub fn span(&self) -> Span {
         match self {
             TypeAnnotation::Named { span, .. }

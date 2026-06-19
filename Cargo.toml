@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 codespan-reporting = "0.11"
-bumpoalo = "3"
+bumpalo = "3"
 
 [dev-dependencies]
 wasmparser = "0.251"
