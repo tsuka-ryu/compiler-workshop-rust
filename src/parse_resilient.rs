@@ -239,16 +239,9 @@ impl Parser {
     fn parse_expression(&mut self) -> Expression {
         let test = self.parse_binary();
 
-        if matches!(self.peek().kind, TokenKind::Ternary) {
-            self.advance(); // ?
+        if self.eat(&TokenKind::Ternary) {
             let consequent = self.parse_expression();
-
-            let colon_tok = self.advance();
-            match colon_tok.kind {
-                TokenKind::Colon => {}
-                other => panic!("Expected ':' in ternary, got {other:?}"),
-            }
-
+            self.expect(&TokenKind::Colon);
             let alternate = self.parse_expression();
             let span = test.span().merge(alternate.span());
             Expression::Conditional {
@@ -311,15 +304,16 @@ impl Parser {
                     self.parse_arrow_function(tok_span)
                 } else {
                     let inner = self.parse_expression();
-                    let rparen = self.advance();
-                    match rparen.kind {
-                        TokenKind::RParen => {}
-                        other => panic!("Expected ')', got {other:?}"),
-                    }
+                    self.expect(&TokenKind::RParen);
                     inner
                 }
             }
-            other => panic!("Unexpected token in expression: {other:?}"),
+            other => {
+                return self.fatal_error(ParseError {
+                    message: format!("unexpected token in expression: {other:?}"),
+                    span: tok_span,
+                });
+            }
         };
 
         // 後置: ( で呼び出し [ でメンバアクセス
@@ -331,12 +325,9 @@ impl Parser {
                 TokenKind::LBracket => {
                     self.advance();
                     let index = self.parse_expression();
-                    let rbracket = self.advance();
-                    match rbracket.kind {
-                        TokenKind::RBracket => {}
-                        other => panic!("Expected ']' in member access, got {other:?}"),
-                    }
-                    let span = expr.span().merge(rbracket.span);
+                    let close_span = self.peek().span;
+                    self.expect(&TokenKind::RBracket);
+                    let span = expr.span().merge(close_span);
                     expr = Expression::Member {
                         object: Box::new(expr),
                         index: Box::new(index),
@@ -366,13 +357,9 @@ impl Parser {
             }
         }
 
-        let rparen = self.advance();
-        match rparen.kind {
-            TokenKind::RParen => {}
-            other => panic!("Expected ')', got {other:?}"),
-        }
-
-        let span = callee.span().merge(rparen.span);
+        let close_span = self.peek().span;
+        self.expect(&TokenKind::RParen);
+        let span = callee.span().merge(close_span);
         Expression::Call {
             callee: Box::new(callee),
             arguments,
@@ -394,15 +381,11 @@ impl Parser {
             }
         }
 
-        let rbracket = self.advance();
-        match rbracket.kind {
-            TokenKind::RBracket => {}
-            other => panic!("Expected ']', got {other:?}"),
-        }
-
+        let close_span = self.peek().span;
+        self.expect(&TokenKind::RBracket);
         Expression::Array {
             elements,
-            span: lbracket_span.merge(rbracket.span),
+            span: lbracket_span.merge(close_span),
         }
     }
 
