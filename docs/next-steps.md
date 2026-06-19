@@ -395,11 +395,18 @@ section 7 の当初案は **matklad / rust-analyzer 流** (sync set でスキッ
 
 ---
 
-## 9. String interning (`Atom<'a>`)
+## 9. String interning (`Atom<'a>`) ✅(実装済み)
 
-新規ファイル: `src/atom.rs`、`src/ast_arena_atom.rs`、`src/parse_arena_atom.rs` (節 8 の arena 版から派生)
+実装ファイル: [`src/atom.rs`](../src/atom.rs)、[`src/ast_arena_atom.rs`](../src/ast_arena_atom.rs)、[`src/parse_arena_atom.rs`](../src/parse_arena_atom.rs)(節 8 の arena 版から派生)
+解説: [string-interning.md](./string-interning.md)
 
 ねらい: AST 中の識別子・文字列リテラルを `String` (heap allocation) ではなく **arena 上に確保された `&'a str` を `Atom<'a>` でラップしたもの** に置き換える。oxc / swc の AST に `Atom<'a>` がそこら中に出てくる理由を体感する。
+
+> 到達点: `Atom<'a>` 型 + `Interner<'a>`(dedup map)を実装し、parser に統合。
+> `"const a = a + a;"` の繰り返し識別子が同一ポインタを共有することをテストで実証(発展 TODO の interning map も完了)。
+> 学び: ① enum サイズは最大バリアントで決まるので `String→Atom` でも `Expression` は縮まない、
+> ② interning が効くと `==` がポインタ比較で代用できる、
+> ③ `intern`(&mut) と `bump.alloc`(&) が別文に分かれていれば借用は衝突しない。詳細は [string-interning.md](./string-interning.md)。
 
 ### 前提
 
@@ -686,7 +693,7 @@ workspace 化しても各 crate の中で `parse.rs` / `parse_pratt.rs` / `parse
 | 6. Pratt parser | 2〜4 時間 | ✅ 実績 |
 | 7. Resilient parsing | 半日〜1 日 | ✅ 実績 (oxc 忠実: 2 層エラー + Dummy) |
 | 8. Arena allocator (実装) | 1 日〜2 日 | ✅ 実績 (span 版を `&'a` 化、`'a` の伝染を体得) |
-| 9. String interning (Atom) | 2〜3 時間 | 8 が終わっていれば軽い |
+| 9. String interning (Atom) | 2〜3 時間 | ✅ 実績 (Atom + Interner + parser 統合, ptr 共有を実証) |
 | 10. Index 型 | 3〜4 時間 | |
 | 11. Linter | 3〜4 時間 | ルール数しだい |
 | 12. Transformer | 3〜5 時間 | |
