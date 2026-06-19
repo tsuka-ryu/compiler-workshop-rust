@@ -294,33 +294,50 @@ fn parse_expr_bp(&mut self, min_bp: u8) -> Expression {
 
 ## 7. Resilient parsing
 
-新規ファイル: `src/parse_resilient.rs`、`src/ast_resilient.rs` (Error ノードを足した AST を別型として置く)
+新規ファイル: `src/parse_resilient.rs` (✅ 実装済み)、`src/ast_resilient.rs` (✅ Error ノード + `Dummy` trait を足した AST 別型)
 
-ねらい: parse エラーで止まらず、Error ノードを混ぜた AST を作り続ける parser。後段 (lint / format) で「壊れたコードでも何か返す」基盤になる。
+ねらい: parse エラーで止まらず、エラーを集めながら結果を返し続ける parser。後段 (lint / format / LSP) で「壊れたコードでも何か返す」基盤になる。
+
+実装解説: [docs/parse-resilient.md](./parse-resilient.md)
+
+### 採った方式: oxc 忠実
+
+section 7 の当初案は **matklad / rust-analyzer 流** (sync set でスキップして Error ノードを挿入し、常に部分木を残す) だったが、oxc を読むと設計がかなり違ったため **oxc 忠実** で実装した。差分は実装解説の「matklad 方式との設計差」を参照。
+
+| | matklad (当初案) | oxc (採用) |
+|---|---|---|
+| 木 | lossless tree | typed AST |
+| エラー | tree に `ERROR` ノードを常時埋める | recoverable は `errors` vec / fatal はダミー |
+| 回復 | sync set で skip、必ず部分木を残す | fatal は木ごと捨てる。回復は recoverable 層が担う |
+| `?` / Result | 使わない (event 列) | 使わない (`Dummy` で巻き戻す) |
 
 ### 前提
 
-- ✅ Span (Error ノードに位置情報を載せるため)
-- ✅ Result (sync set との組み合わせで使う)
+- ✅ Span (エラーに位置情報を載せるため)
+- ✅ Result の発想 (ただし oxc 忠実版では `?` は使わず `Dummy` 巻き戻し)
 
-### 最初のステップ
+### 実装したこと
 
-1. AST に Error ノードを追加 (`Expression::Error`、`Statement::Error` など)。AST を侵襲しないために `ast_resilient.rs` に別型として定義
-2. `parse_resilient.rs` を `parse.rs` のコピーから出発して書き換え
-3. **sync set** を決める (`}`, `;`, `const`, `return` など、文の境界として明らかに認識できるもの)
-4. エラー時は Err 返却ではなく sync set まで skip して Error ノードを挿入
-5. エラー情報は `Vec<ParseError>` を別途返す
+1. ✅ `ast_resilient.rs`: `Expression::Error` / `Statement::Error` を追加。`Dummy` trait を定義し Expression / Statement / TypeAnnotation に impl (`fatal_error<T: Dummy>()` をジェネリックにする)
+2. ✅ `parse_resilient.rs`: `parse_span.rs` のコピーから `panic!` を 2 層エラーに置換
+3. ✅ **2 層エラー**: recoverable (`error()` で `errors` に積み続行) / fatal (`set_fatal_error()` で `advance_to_end()` + フラグ → `has_fatal_error()` で全ループ巻き戻し)
+4. ✅ oxc 語彙の cursor ヘルパ (`at` / `eat` / `expect` / `expect_ident`)
+5. ✅ `ParserReturn { statements, errors, panicked }`。最上位で fatal なら `errors.truncate(errors_len)` + fatal 1 件 + 木を捨てて `panicked = true`
+6. ✅ snapshot 3 件 (well-formed / recoverable / fatal) を `tests/parse_snapshots.rs` に追加
 
 ### 学習ポイント
 
-- 「壊れたコードでも木を作る」設計
-- sync set の選び方 (狭すぎるとエラーがカスケード、広すぎるとエラー範囲が広い)
-- Error ノードを後段でどう扱うか (基本はスキップ)
-- oxc / rust-analyzer / Roslyn など実用 parser はだいたいこの方式
+- recoverable / fatal の **2 層エラー**設計 (oxc の肝)
+- `Dummy` trait で `Result` / `?` を使わずスタックを巻き戻す発想
+- `advance_to_end` + `has_fatal_error` でループを一斉に止める仕組み
+- 「常に部分木を残す (matklad)」と「fatal で木を捨てる (oxc)」の設計トレードオフ
+- oxc / rust-analyzer / Roslyn など実用 parser のエラー回復方式の差
 
 ### 読書 TODO
 
-- [ ] [matklad / Resilient LL Parsing Tutorial](https://matklad.github.io/2023/05/21/resilient-ll-parsing-tutorial.html) — エラー回復の実装手引き
+- [x] [matklad / Resilient LL Parsing Tutorial](https://matklad.github.io/2023/05/21/resilient-ll-parsing-tutorial.html) — sync set 方式。oxc との設計対比に
+- [x] [oxc_parser error_handler.rs](https://github.com/oxc-project/oxc/blob/main/crates/oxc_parser/src/error_handler.rs) — recoverable / fatal の 2 層
+- [x] [oxc_parser cursor.rs](https://github.com/oxc-project/oxc/blob/main/crates/oxc_parser/src/cursor.rs) — `at` / `eat` / `bump` / `expect` / `checkpoint` / `rewind`
 
 ---
 
@@ -662,7 +679,7 @@ workspace 化しても各 crate の中で `parse.rs` / `parse_pratt.rs` / `parse
 | 4. Snapshot testing (insta) | 30 分〜1 時間 | ✅ 実績 |
 | 5. Visit/Traverse | 2〜3 時間 | ✅ 実績 (Visit / VisitMut / Traverse 全部) |
 | 6. Pratt parser | 2〜4 時間 | ✅ 実績 |
-| 7. Resilient parsing | 半日〜1 日 | sync set の調整次第 |
+| 7. Resilient parsing | 半日〜1 日 | ✅ 実績 (oxc 忠実: 2 層エラー + Dummy) |
 | 8. Arena allocator (実装) | 1 日〜2 日 | `'a` の伝染と格闘 |
 | 9. String interning (Atom) | 2〜3 時間 | 8 が終わっていれば軽い |
 | 10. Index 型 | 3〜4 時間 | |

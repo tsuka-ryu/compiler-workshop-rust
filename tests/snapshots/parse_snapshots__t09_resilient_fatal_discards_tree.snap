@@ -1,0 +1,17 @@
+---
+source: tests/parse_snapshots.rs
+expression: ret
+---
+ParserReturn {
+    statements: [],
+    errors: [
+        ParseError {
+            message: "unexpected token in expression: Semicolon",
+            span: Span {
+                start: 10,
+                end: 11,
+            },
+        },
+    ],
+    panicked: true,
+}

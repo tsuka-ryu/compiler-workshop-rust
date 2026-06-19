@@ -1,11 +1,13 @@
 use crate::tokenize::tokenize;
 
+pub mod ast_resilient;
 pub mod ast_span;
 pub mod diagnostics;
 pub mod monomorphize;
 pub mod naming;
 pub mod parse;
 pub mod parse_pratt;
+pub mod parse_resilient;
 pub mod parse_result;
 pub mod parse_span;
 pub mod tokenize;
