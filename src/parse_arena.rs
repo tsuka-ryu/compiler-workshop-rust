@@ -66,14 +66,14 @@ impl<'a> Parser<'a> {
         false
     }
 
-    fn parse_statement(&mut self) -> Statement {
+    fn parse_statement(&mut self) -> Statement<'a> {
         match self.peek().kind {
             TokenKind::Const => self.parse_const_declaration(),
             TokenKind::Return => self.parse_return_statement(),
             _ => panic!("Unexpected token: {:?}", self.peek()),
         }
     }
-    fn parse_const_declaration(&mut self) -> Statement {
+    fn parse_const_declaration(&mut self) -> Statement<'a> {
         let start_span = self.advance().span;
 
         let ident_tok = self.advance();
@@ -115,7 +115,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_return_statement(&mut self) -> Statement {
+    fn parse_return_statement(&mut self) -> Statement<'a> {
         let start_span = self.advance().span; // return
 
         let argument = if matches!(
@@ -141,7 +141,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_expression(&mut self) -> Expression {
+    fn parse_expression(&mut self) -> Expression<'a> {
         let test = self.parse_binary();
 
         if matches!(self.peek().kind, TokenKind::Ternary) {
@@ -157,9 +157,9 @@ impl<'a> Parser<'a> {
             let alternate = self.parse_expression();
             let span = test.span().merge(alternate.span());
             Expression::Conditional {
-                test: Box::new(test),
-                consequent: Box::new(consequent),
-                alternate: Box::new(alternate),
+                test: self.bump.alloc(test),
+                consequent: self.bump.alloc(consequent),
+                alternate: self.bump.alloc(alternate),
                 span,
             }
         } else {
@@ -167,7 +167,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_binary(&mut self) -> Expression {
+    fn parse_binary(&mut self) -> Expression<'a> {
         let mut left = self.parse_primary();
 
         loop {
@@ -180,9 +180,9 @@ impl<'a> Parser<'a> {
             let right = self.parse_primary();
             let span = left.span().merge(right.span());
             left = Expression::Binary {
-                left: Box::new(left),
+                left: self.bump.alloc(left),
                 op,
-                right: Box::new(right),
+                right: self.bump.alloc(right),
                 span,
             };
         }
@@ -190,7 +190,7 @@ impl<'a> Parser<'a> {
         left
     }
 
-    fn parse_primary(&mut self) -> Expression {
+    fn parse_primary(&mut self) -> Expression<'a> {
         let tok = self.advance();
         let tok_span = tok.span;
         let mut expr = match tok.kind {
@@ -243,8 +243,8 @@ impl<'a> Parser<'a> {
                     }
                     let span = expr.span().merge(rbracket.span);
                     expr = Expression::Member {
-                        object: Box::new(expr),
-                        index: Box::new(index),
+                        object: self.bump.alloc(expr),
+                        index: self.bump.alloc(index),
                         span,
                     };
                 }
@@ -255,7 +255,7 @@ impl<'a> Parser<'a> {
         expr
     }
 
-    fn parse_call(&mut self, callee: Expression) -> Expression {
+    fn parse_call(&mut self, callee: Expression<'a>) -> Expression<'a> {
         self.advance(); // (
 
         let mut arguments = Vec::new();
@@ -279,13 +279,13 @@ impl<'a> Parser<'a> {
 
         let span = callee.span().merge(rparen.span);
         Expression::Call {
-            callee: Box::new(callee),
+            callee: self.bump.alloc(callee),
             arguments,
             span,
         }
     }
 
-    fn parse_array(&mut self, lbracket_span: Span) -> Expression {
+    fn parse_array(&mut self, lbracket_span: Span) -> Expression<'a> {
         let mut elements = Vec::new();
 
         if !matches!(self.peek().kind, TokenKind::RBracket) {
@@ -311,7 +311,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_arrow_function(&mut self, lparen_span: Span) -> Expression {
+    fn parse_arrow_function(&mut self, lparen_span: Span) -> Expression<'a> {
         let mut params = Vec::new();
 
         if !matches!(self.peek().kind, TokenKind::RParen) {
@@ -387,7 +387,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_type_annotation(&mut self) -> TypeAnnotation {
+    fn parse_type_annotation(&mut self) -> TypeAnnotation<'a> {
         let tok = self.advance();
         let start_span = tok.span;
         let base = match tok.kind {
@@ -433,7 +433,7 @@ impl<'a> Parser<'a> {
                         other => panic!("Expected '>', got {other:?}"),
                     }
                     return TypeAnnotation::Array {
-                        element: Box::new(elem),
+                        element: self.bump.alloc(elem),
                         span: start_span.merge(gt.span),
                     };
                 }
@@ -459,7 +459,7 @@ impl<'a> Parser<'a> {
             }
             let base_span = base.span();
             return TypeAnnotation::Array {
-                element: Box::new(base),
+                element: self.bump.alloc(base),
                 span: base_span.merge(rbracket.span),
             };
         }
@@ -468,8 +468,12 @@ impl<'a> Parser<'a> {
     }
 }
 
-pub fn parse_span(tokens: Vec<Token>) -> Vec<Statement> {
-    let mut parser = Parser { tokens, pos: 0 };
+pub fn parse_span<'a>(bump: &'a Bump, tokens: Vec<Token>) -> Vec<Statement<'a>> {
+    let mut parser = Parser {
+        bump,
+        tokens,
+        pos: 0,
+    };
     let mut statements = Vec::new();
     while !parser.at_end() {
         statements.push(parser.parse_statement());
@@ -486,7 +490,8 @@ mod tests {
     fn const_decl_span_covers_whole_statement() {
         // "const x = 5;"
         //  0          12
-        let stmts = parse_span(tokenize_span("const x = 5;"));
+        let bump = Bump::new();
+        let stmts = parse_span(&bump, tokenize_span("const x = 5;"));
         assert_eq!(stmts[0].span(), Span { start: 0, end: 12 });
     }
 
@@ -494,7 +499,8 @@ mod tests {
     fn binary_span_covers_both_operands() {
         // "const x = 1 + 2;"
         //           10  14
-        let stmts = parse_span(tokenize_span("const x = 1 + 2;"));
+        let bump = Bump::new();
+        let stmts = parse_span(&bump, tokenize_span("const x = 1 + 2;"));
         if let Statement::ConstDeclaration { init, .. } = &stmts[0] {
             assert_eq!(init.span(), Span { start: 10, end: 15 });
         } else {
