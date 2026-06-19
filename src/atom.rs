@@ -1,4 +1,5 @@
 use bumpalo::Bump;
+use std::collections::HashMap;
 
 /// arena 上の `&'a str` を包む軽量な識別子/文字列型。
 ///
@@ -15,6 +16,45 @@ impl<'a> Atom<'a> {
 
     pub fn as_str(&self) -> &'a str {
         self.0
+    }
+
+    /// 中身の文字列の「先頭ポインタ」が一致するか。
+    ///
+    /// 同じ [`Interner`] から作った `Atom` 同士なら
+    /// 「内容が同じ ⟺ ポインタが同じ」が保証されるので、
+    /// 中身を1文字ずつ比べる代わりにこれで `==` を済ませられる。
+    pub fn ptr_eq(&self, other: &Atom) -> bool {
+        std::ptr::eq(self.0.as_ptr(), other.0.as_ptr())
+    }
+}
+
+/// 同じ文字列を1回だけ arena に確保し、以降は同じ `Atom` を返す。
+///
+/// `map` が「これまで確保した文字列 → その `Atom`」を覚えている。
+/// `Atom::new_in` が毎回新しく alloc するのに対し、こちらは**重複を排除する**。
+pub struct Interner<'a> {
+    bump: &'a Bump,
+    map: HashMap<&'a str, Atom<'a>>,
+}
+
+impl<'a> Interner<'a> {
+    pub fn new(bump: &'a Bump) -> Self {
+        Interner {
+            bump,
+            map: HashMap::new(),
+        }
+    }
+
+    /// `s` を intern する。既出なら確保済みの `Atom` を、初出なら
+    /// arena に1個だけ確保した `Atom` を返す。
+    pub fn intern(&mut self, s: &str) -> Atom<'a> {
+        if let Some(&atom) = self.map.get(s) {
+            return atom; // 既出: 新規 alloc せず使い回す
+        }
+        let allocated: &'a str = self.bump.alloc_str(s);
+        let atom = Atom(allocated);
+        self.map.insert(allocated, atom);
+        atom
     }
 }
 
@@ -54,6 +94,31 @@ mod tests {
             size_of::<ast_arena::Expression>(),
             size_of::<ast_arena_atom::Expression>(),
         );
+    }
+
+    #[test]
+    fn new_in_does_not_dedup_so_pointers_differ() {
+        // interning なし: 同じ内容でも毎回別 alloc → 別ポインタ
+        let bump = Bump::new();
+        let a = Atom::new_in(&bump, "count");
+        let b = Atom::new_in(&bump, "count");
+        assert_eq!(a, b); // 内容は等しい (derive した PartialEq は中身比較)
+        assert!(!a.ptr_eq(&b)); // でもポインタは別物
+    }
+
+    #[test]
+    fn interner_dedups_to_same_pointer() {
+        // interning あり: 同じ内容なら同じポインタを共有する
+        let bump = Bump::new();
+        let mut interner = Interner::new(&bump);
+        let a = interner.intern("count");
+        let b = interner.intern("count");
+        let c = interner.intern("other");
+
+        assert!(a.ptr_eq(&b)); // 同内容 → 同ポインタ (使い回された)
+        assert!(!a.ptr_eq(&c)); // 別内容 → 別ポインタ
+        // ここまで来れば == はポインタ比較 (16 byte) で代用できる
+        assert_eq!(a.ptr_eq(&b), a == b);
     }
 
     #[test]
