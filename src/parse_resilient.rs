@@ -540,18 +540,41 @@ impl Parser {
     }
 }
 
-pub fn parse_resilient(tokens: Vec<Token>) -> Vec<Statement> {
+#[derive(Debug)]
+pub struct ParserReturn {
+    pub statements: Vec<Statement>,
+    pub errors: Vec<ParseError>,
+    pub panicked: bool,
+}
+
+pub fn parse_resilient(tokens: Vec<Token>) -> ParserReturn {
     let mut parser = Parser {
         tokens,
         pos: 0,
         errors: Vec::new(),
         fatal_error: None,
     };
+
     let mut statements = Vec::new();
     while !parser.at_end() {
         statements.push(parser.parse_statement());
     }
-    statements
+
+    let mut panicked = false;
+    if let Some(fatal) = parser.fatal_error.take() {
+        panicked = true;
+        // 巻き戻し中に積まれた recoverable error を捨てる
+        parser.errors.truncate(fatal.errors_len);
+        parser.errors.push(fatal.error);
+        // fatal 時は木を捨てる
+        statements = Vec::new();
+    }
+
+    ParserReturn {
+        statements,
+        errors: parser.errors,
+        panicked,
+    }
 }
 
 #[cfg(test)]
@@ -563,16 +586,16 @@ mod tests {
     fn const_decl_span_covers_whole_statement() {
         // "const x = 5;"
         //  0          12
-        let stmts = parse_resilient(tokenize_span("const x = 5;"));
-        assert_eq!(stmts[0].span(), Span { start: 0, end: 12 });
+        let ret = parse_resilient(tokenize_span("const x = 5;"));
+        assert_eq!(ret.statements[0].span(), Span { start: 0, end: 12 });
     }
 
     #[test]
     fn binary_span_covers_both_operands() {
         // "const x = 1 + 2;"
         //           10  14
-        let stmts = parse_resilient(tokenize_span("const x = 1 + 2;"));
-        if let Statement::ConstDeclaration { init, .. } = &stmts[0] {
+        let ret = parse_resilient(tokenize_span("const x = 1 + 2;"));
+        if let Statement::ConstDeclaration { init, .. } = &ret.statements[0] {
             assert_eq!(init.span(), Span { start: 10, end: 15 });
         } else {
             panic!("expected ConstDeclaration");
