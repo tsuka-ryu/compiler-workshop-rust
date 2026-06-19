@@ -1,10 +1,11 @@
 use crate::ast_arena_atom::{BinaryOp, Expression, Parameter, Statement, TypeAnnotation};
-use crate::atom::Atom;
+use crate::atom::Interner;
 use crate::tokenize_span::{Span, Token, TokenKind};
 use bumpalo::Bump;
 
 struct Parser<'a> {
     bump: &'a Bump,
+    interner: Interner<'a>,
     tokens: Vec<Token>,
     pos: usize,
 }
@@ -79,7 +80,7 @@ impl<'a> Parser<'a> {
 
         let ident_tok = self.advance();
         let name = match ident_tok.kind {
-            TokenKind::Ident(s) => Atom::new_in(self.bump, &s),
+            TokenKind::Ident(s) => self.interner.intern(&s),
             other => panic!("Expected identifier, got {other:?}"),
         };
 
@@ -200,7 +201,7 @@ impl<'a> Parser<'a> {
                 span: tok_span,
             },
             TokenKind::StringLit(s) => Expression::String {
-                value: Atom::new_in(self.bump, &s),
+                value: self.interner.intern(&s),
                 span: tok_span,
             },
             TokenKind::Boolean(b) => Expression::Boolean {
@@ -208,7 +209,7 @@ impl<'a> Parser<'a> {
                 span: tok_span,
             },
             TokenKind::Ident(name) => Expression::Identifier {
-                name: Atom::new_in(self.bump, &name),
+                name: self.interner.intern(&name),
                 span: tok_span,
             },
             TokenKind::LBracket => self.parse_array(tok_span),
@@ -320,7 +321,7 @@ impl<'a> Parser<'a> {
                 let name_tok = self.advance();
                 let name_span = name_tok.span;
                 let name = match name_tok.kind {
-                    TokenKind::Ident(s) => Atom::new_in(self.bump, &s),
+                    TokenKind::Ident(s) => self.interner.intern(&s),
                     other => panic!("Expected param name, got {other:?}"),
                 };
 
@@ -393,35 +394,35 @@ impl<'a> Parser<'a> {
         let start_span = tok.span;
         let base = match tok.kind {
             TokenKind::TypeNumber => TypeAnnotation::Named {
-                name: Atom::new_in(self.bump, "number"),
+                name: self.interner.intern("number"),
                 span: start_span,
             },
             TokenKind::TypeString => TypeAnnotation::Named {
-                name: Atom::new_in(self.bump, "string"),
+                name: self.interner.intern("string"),
                 span: start_span,
             },
             TokenKind::TypeBoolean => TypeAnnotation::Named {
-                name: Atom::new_in(self.bump, "boolean"),
+                name: self.interner.intern("boolean"),
                 span: start_span,
             },
             TokenKind::TypeVoid => TypeAnnotation::Named {
-                name: Atom::new_in(self.bump, "void"),
+                name: self.interner.intern("void"),
                 span: start_span,
             },
             TokenKind::TypeInt => TypeAnnotation::Named {
-                name: Atom::new_in(self.bump, "Void"),
+                name: self.interner.intern("Void"),
                 span: start_span,
             },
             TokenKind::TypeFloat => TypeAnnotation::Named {
-                name: Atom::new_in(self.bump, "Float"),
+                name: self.interner.intern("Float"),
                 span: start_span,
             },
             TokenKind::TypeBool => TypeAnnotation::Named {
-                name: Atom::new_in(self.bump, "Bool"),
+                name: self.interner.intern("Bool"),
                 span: start_span,
             },
             TokenKind::TypeUnit => TypeAnnotation::Named {
-                name: Atom::new_in(self.bump, "Unit"),
+                name: self.interner.intern("Unit"),
                 span: start_span,
             },
             TokenKind::TypeArray => {
@@ -439,12 +440,12 @@ impl<'a> Parser<'a> {
                     };
                 }
                 TypeAnnotation::Named {
-                    name: Atom::new_in(self.bump, "Array"),
+                    name: self.interner.intern("Array"),
                     span: start_span,
                 }
             }
             TokenKind::Ident(name) => TypeAnnotation::Named {
-                name: Atom::new_in(self.bump, &name),
+                name: self.interner.intern(&name),
                 span: start_span,
             },
             other => panic!("Expected type annotation, got {other:?}"),
@@ -472,6 +473,7 @@ impl<'a> Parser<'a> {
 pub fn parse_span<'a>(bump: &'a Bump, tokens: Vec<Token>) -> Vec<Statement<'a>> {
     let mut parser = Parser {
         bump,
+        interner: Interner::new(bump),
         tokens,
         pos: 0,
     };
@@ -507,5 +509,26 @@ mod tests {
         } else {
             panic!("expected ConstDeclaration");
         }
+    }
+
+    #[test]
+    fn repeated_identifier_is_interned_to_same_pointer() {
+        // "const a = a + a;" の右辺 a + a は同じ識別子 a が2回。
+        // parser が Interner を通しているので、両者は同じ arena 上の
+        // 文字列を共有する (ptr_eq が true)。
+        let bump = Bump::new();
+        let stmts = parse_span(&bump, tokenize_span("const a = a + a;"));
+        let Statement::ConstDeclaration { init, .. } = &stmts[0] else {
+            panic!("expected ConstDeclaration");
+        };
+        let Expression::Binary { left, right, .. } = init else {
+            panic!("expected Binary");
+        };
+        let (Expression::Identifier { name: l, .. }, Expression::Identifier { name: r, .. }) =
+            (left, right)
+        else {
+            panic!("expected two Identifiers");
+        };
+        assert!(l.ptr_eq(r), "同じ識別子なのにポインタが別 = interning が効いていない");
     }
 }
