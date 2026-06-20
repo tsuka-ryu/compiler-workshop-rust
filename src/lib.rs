@@ -10,6 +10,7 @@ pub mod lint;
 pub mod monomorphize;
 pub mod naming;
 pub mod naming_indexed;
+pub mod naming_span;
 pub mod parse;
 pub mod parse_arena;
 pub mod parse_arena_atom;
