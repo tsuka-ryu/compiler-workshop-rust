@@ -448,6 +448,7 @@ section 7 の当初案は **matklad / rust-analyzer 流** (sync set でスキッ
 ## 10. Index 型 (NodeId / SymbolId / ScopeId) ✅(実装済み)
 
 実装ファイル: [`src/naming_indexed.rs`](../src/naming_indexed.rs)(節 5 の `naming.rs` から派生)
+解説: [index-types.md](./index-types.md)
 
 ねらい: 既存 `naming.rs` は `Vec<HashSet<String>>` のスタックで scope を管理するが、oxc の `oxc_semantic` は **`Vec<Symbol>` + `SymbolId(u32)`** ベースで symbol を管理する。これを真似て書き直す。
 
