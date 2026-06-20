@@ -445,11 +445,20 @@ section 7 の当初案は **matklad / rust-analyzer 流** (sync set でスキッ
 
 ---
 
-## 10. Index 型 (NodeId / SymbolId / ScopeId)
+## 10. Index 型 (NodeId / SymbolId / ScopeId) ✅(実装済み)
 
-新規ファイル: `src/naming_indexed.rs`
+実装ファイル: [`src/naming_indexed.rs`](../src/naming_indexed.rs)(節 5 の `naming.rs` から派生)
 
-ねらい: 既存 `naming.rs` は `HashMap<String, _>` ベースだが、oxc の `oxc_semantic` は **`Vec<Symbol>` + `SymbolId(u32)`** ベースで symbol を管理する。これを真似て書き直す。
+ねらい: 既存 `naming.rs` は `Vec<HashSet<String>>` のスタックで scope を管理するが、oxc の `oxc_semantic` は **`Vec<Symbol>` + `SymbolId(u32)`** ベースで symbol を管理する。これを真似て書き直す。
+
+> 到達点: `SymbolId` / `ScopeId` / `ReferenceId` の u32 newtype と `Symbol` / `Scope` / `Reference` の実体、
+> `SemanticBuilder` を実装。旧 `naming.rs` と同じ 13 テストを移植して**同値**を確認。
+> 学び: ① スタックの `push`/`pop` が `enter_scope`(実体を積む + `current_scope` 付け替え) /
+> `leave_scope`(id を戻すだけ・**実体は Vec に残す**)に化ける、
+> ② `is_declared`(bool) が `resolve`(parent チェーンを辿って `SymbolId` を返す)になり、参照は
+> `Reference { resolved: Option<SymbolId> }` として捨てずに残る、
+> ③ symbols/scopes/references は 1 ファイル分で頭打ち + `name_check` を抜けると丸ごと drop なので
+> 「溜める」設計でもメモリは破綻しない(arena と同じ per-file 寿命)。
 
 ### arena (節 8/9) との対比 — `Bump` は使わない
 
@@ -714,7 +723,7 @@ workspace 化しても各 crate の中で `parse.rs` / `parse_pratt.rs` / `parse
 | 7. Resilient parsing | 半日〜1 日 | ✅ 実績 (oxc 忠実: 2 層エラー + Dummy) |
 | 8. Arena allocator (実装) | 1 日〜2 日 | ✅ 実績 (span 版を `&'a` 化、`'a` の伝染を体得) |
 | 9. String interning (Atom) | 2〜3 時間 | ✅ 実績 (Atom + Interner + parser 統合, ptr 共有を実証) |
-| 10. Index 型 | 3〜4 時間 | |
+| 10. Index 型 | 3〜4 時間 | ✅ 実績 (Symbol/Scope/Reference + SemanticBuilder, 旧版と同値) |
 | 11. Linter | 3〜4 時間 | ルール数しだい |
 | 12. Transformer | 3〜5 時間 | |
 | 13. Formatter (浅め) | 3〜5 時間 | |
