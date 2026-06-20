@@ -557,9 +557,11 @@ index 型の旨味:
 ### 設計
 
 - AST: 子 = `bumpalo::boxed::Box<'a, Expression<'a>>`、リスト = `bumpalo::collections::Vec<'a, _>`、名前 = `Atom<'a>`。所有 Box なので `*expr = ...` で差し替え可。
-- id: ノードに `Cell<Option<SymbolId>>` / `Cell<Option<ReferenceId>>` を埋める。naming が `&AST` のまま書き、rename はノードを直読み。
+  - 注意: `*expr = ...` で差し替えた古い部分木は arena 内に残り、arena drop まで解放されない (oxc も同じ)。「可変なのにメモリは増える一方」という挙動こそが、in-place 書き換えが軽い理由 (確保がポインタ加算だけ)。
+- id: ノードに `Cell<Option<SymbolId>>` / `Cell<Option<ReferenceId>>` を埋める。naming が `&AST` のまま書き、rename はノードを直読み。`Cell` を選ぶのは id 埋めに `&mut` を要求しないため (共有参照 + 内部可変性)。
 - rename は新名の `Atom` を arena に確保するため `&'a Bump` を持つ。
-- 並置: 既存は無改造、`ast_arena` / `parse_arena` を**まるごとコピー**して可変版を作る。
+- 駆動順序: パース (`parse_arena_mut`) → naming (`naming_arena` が `Cell` を埋める) → transform。scope-aware rename (Phase 5) は naming 後でないと成立しない。
+- 並置: 既存は無改造、`ast_arena` / `parse_arena` を**まるごとコピー**して可変版を作る。コピー後の元との差分は実質 3 種だけ (子の Box 化 / リストの arena `Vec` 化 / id `Cell` 追加) — 写経時はこの diff を意識する。
 
 ### ステップ
 
@@ -586,7 +588,7 @@ index 型の旨味:
    ```
 5. 定数畳み込み: `exit_expression` で `1 + 2` → `3` (post-order、`*expr = Number{..}`)。
 6. 素朴 rename: `enter_expression` で同名を全置換 (`Atom::new_in(bump, ..)`)。
-7. enter vs exit デモ: 同じ木で結果差を見る (数値2倍など)。
+7. enter vs exit デモ: 同じ木で結果差を見る (数値2倍など)。素朴 rename (6) は enter/exit どちらでも結果が変わらないことも併せて見せ、「順序が効くのは値が下から伝播する変換 (畳み込み) だけ」という一般則を浮き彫りにする。
 8. pipeline: 複数 transformer を順に繋ぐ。
 
 **Phase 5 — scope-aware rename**
