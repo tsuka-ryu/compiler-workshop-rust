@@ -503,11 +503,22 @@ index 型の旨味:
 
 ---
 
-## 11. Linter
+## 11. Linter ✅(実装済み)
 
-新規ファイル: `src/lint.rs`
+実装ファイル: [`src/lint.rs`](../src/lint.rs)
 
-ねらい: visit パターン (節 4) と index 型 (節 8) の応用。
+ねらい: visit パターン (節 5) と symbol table (節 10) の応用。`ast_span` AST の上に、
+**ルール毎に visitor を 1 個** 作るスタイルで linter を組む。
+
+> 到達点: `LintWarning { rule_name, message, span }` と `lint()` エントリ + 3 ルールを実装。
+> - `constant-condition` — 三項の test が真偽値リテラル (`true ? a : b`)。Visit だけ。
+> - `unreachable-code` — `return` より後の文。body の Vec を走る。Visit だけ。
+> - `no-unused-vars` — 宣言されたが参照されない変数。**symbol table が要る**。
+>
+> 学び: ① symbol table が要るルール (no-unused-vars) と要らないルール (他 2 つ) で実装が分かれる、
+> ② 節 10 の `naming_indexed` は `crate::parse` AST 上で span を持たないため、span 付き警告を出す
+> no-unused-vars は `ast_span` 上に `used: bool` 付きの最小 symbol table を作り直した、
+> ③ 「集めるパス (declare/mark_used) と報告するパス (leave_scope で未使用回収)」を分ける発想。
 
 ### 最初のステップ
 
@@ -725,7 +736,7 @@ workspace 化しても各 crate の中で `parse.rs` / `parse_pratt.rs` / `parse
 | 8. Arena allocator (実装) | 1 日〜2 日 | ✅ 実績 (span 版を `&'a` 化、`'a` の伝染を体得) |
 | 9. String interning (Atom) | 2〜3 時間 | ✅ 実績 (Atom + Interner + parser 統合, ptr 共有を実証) |
 | 10. Index 型 | 3〜4 時間 | ✅ 実績 (Symbol/Scope/Reference + SemanticBuilder, 旧版と同値) |
-| 11. Linter | 3〜4 時間 | ルール数しだい |
+| 11. Linter | 3〜4 時間 | ✅ 実績 (constant-condition / unreachable-code / no-unused-vars の 3 ルール) |
 | 12. Transformer | 3〜5 時間 | |
 | 13. Formatter (浅め) | 3〜5 時間 | |
 | 14. LSP Phase 1 | 1〜2 日 | プロトコル立ち上げが重い |
