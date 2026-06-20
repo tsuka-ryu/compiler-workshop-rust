@@ -8,6 +8,7 @@ pub mod ast_span;
 pub mod diagnostics;
 pub mod monomorphize;
 pub mod naming;
+pub mod naming_indexed;
 pub mod parse;
 pub mod parse_arena;
 pub mod parse_arena_atom;
