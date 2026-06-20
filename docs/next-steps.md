@@ -548,86 +548,59 @@ index 型の旨味:
 
 ---
 
-## 12. Transformer (+ span 付き naming を節14 から前倒し)
+## 12. Transformer (oxc 忠実: 可変 arena AST + `'a` 伝染)
 
-新規ファイル: `src/naming_span.rs`、`src/transform.rs`、`src/monomorphize_v2.rs`
+新規ファイル: `src/ast_arena_mut.rs`、`src/parse_arena_mut.rs`、`src/naming_arena.rs`、`src/transform.rs`、`src/monomorphize_v2.rs`
 
-ねらい: 節 5 の `VisitMut` を土台に、AST → AST の汎用書き換えフレームワークを作る。既存の `monomorphize.rs` は「専用 transformer」だが、こちらは「汎用 transformer」という対比。oxc では [`oxc_transformer`](https://github.com/oxc-project/oxc/tree/main/crates/oxc_transformer) が linter / formatter と並ぶ柱の 1 本。
+ねらい: AST → AST の汎用書き換えフレームワークを oxc 忠実に作る。**可変 arena AST** を `&mut` で書き換え、`'a` が transformer 全体に伝染するのを体験する。semantic は index 型のまま (arena とは別軸)。
 
-**この節で節14 の前段タスク (span 付き naming への一本化) を前倒しする。** 理由は「正しい identifier rename には symbol table が要る」から。素朴な rename (同名を全置換) はスコープ・シャドーイングを区別できないので、`SymbolId` で「同じ binding だけ」を置換するには span 付き naming が前提になる。
+### 設計
 
-### 全体方針
-
-- **Box AST + Index Semantic** で行く。AST 本体は `ast_span` (Box ベース)、symbol/scope/reference は index 型 (`Vec` + `u32`)。
-  - arena は使わない。書き換え (`*expr = ...`) は Box 所有 AST のほうが素直、symbol グラフは index 型のほうが `'a` に絡まない (節10 の結論)。
-  - oxc は「1 本の arena AST に semantic も transform も全部乗せる」が、それは並置スタイルと相性が悪く重いので Box AST で代替する。
-- **`ast_span.rs` は触らない。** naming は AST に id を埋め込まず、`HashMap<Span, SymbolId>` の外部マップで「identifier ノード → symbol」を引く (identifier の span は一意なので NodeId 代わりに使える)。
-
-### 並置スタイル
-
-すべて新規ファイルで横に並べる。既存は一切書き換えない。
-
-- `src/naming_indexed.rs` (節10、parse AST) は残す → span 付き版を `src/naming_span.rs` として新規
-  - `naming.rs` (HashSet, parse AST) → `naming_indexed.rs` (index, parse AST) → `naming_span.rs` (index + span AST) の 3 段並び
-- `src/lint.rs` (節11) は残す (no-unused-vars の自前 symbol table もそのまま。一本化のデモは節14 に回す)
-- `src/monomorphize.rs` は残す → 汎用版を `src/monomorphize_v2.rs` として新規
-
-### 前提
-
-- ✅ 節 5 `VisitMut`
-- ✅ 節 10 Index 型 (`naming_indexed`) — これを span 付き AST に載せ替える
+- AST: 子 = `bumpalo::boxed::Box<'a, Expression<'a>>`、リスト = `bumpalo::collections::Vec<'a, _>`、名前 = `Atom<'a>`。所有 Box なので `*expr = ...` で差し替え可。
+- id: ノードに `Cell<Option<SymbolId>>` / `Cell<Option<ReferenceId>>` を埋める。naming が `&AST` のまま書き、rename はノードを直読み。
+- rename は新名の `Atom` を arena に確保するため `&'a Bump` を持つ。
+- 並置: 既存は無改造、`ast_arena` / `parse_arena` を**まるごとコピー**して可変版を作る。
 
 ### ステップ
 
-**Phase 0 — `src/naming_span.rs` (節14 前倒し)**
+**Phase 0 — 可変 arena AST**
 
-1. 節10 `naming_indexed` を `ast_span` AST の上に作り直す。`Symbol` / `Reference` に span を持たせる
-   (`crate::parse` AST は span を持たないので別ファイルで新規)。
-2. `HashMap<Span, SymbolId>` を構築して返す (identifier の span → 解決先 symbol)。rename / LSP が使う索引。
-3. これで「span 付き AST の上に naming を 1 個」という oxc `oxc_semantic` の形 (index 部分) になる。
+1. `ast_arena_mut.rs`: `ast_arena.rs` をコピーし、子を `bumpalo::boxed::Box<'a, _>` に。宣言名 `BindingIdentifier<'a>` / 使用 `IdentifierReference<'a>` に id `Cell` を持たせる (`Cell` を含むので `PartialEq` は derive しない)。
+2. `parse_arena_mut.rs`: `parse_arena.rs` をコピーし、`&'a Bump` を受け取って可変 arena AST を産出 (id `Cell` は `None` 初期化)。
 
-**Phase 1〜4 — `src/transform.rs` (Transformer フレームワーク)**
+**Phase 0.5 — `naming_arena.rs`**
 
-4. `Transformer` trait を定義 (enter/exit の 2 段フック)
+3. arena AST を走査し、宣言で `BindingIdentifier.symbol_id`、使用で `IdentifierReference.reference_id` を埋める。`Symbol`/`Scope`/`Reference` は `Vec` + `u32`。
+
+**Phase 1〜4 — `transform.rs`**
+
+4. `Transformer<'a>` trait (enter/exit の 2 段フック) + `transform()` ドライバ。ドライバは **enter → 子を再帰 → exit**、子は `&mut **boxed_child` で降りる。
    ```rust
-   pub trait Transformer {
-       fn enter_statement(&mut self, _stmt: &mut Statement) {}
-       fn exit_statement(&mut self, _stmt: &mut Statement) {}
-       fn enter_expression(&mut self, _expr: &mut Expression) {}
-       fn exit_expression(&mut self, _expr: &mut Expression) {}
+   pub trait Transformer<'a> {
+       fn enter_statement(&mut self, _stmt: &mut Statement<'a>) {}
+       fn exit_statement(&mut self, _stmt: &mut Statement<'a>) {}
+       fn enter_expression(&mut self, _expr: &mut Expression<'a>) {}
+       fn exit_expression(&mut self, _expr: &mut Expression<'a>) {}
    }
-   pub fn transform<T: Transformer>(t: &mut T, stmts: &mut [Statement]) { ... }
+   pub fn transform<'a, T: Transformer<'a>>(t: &mut T, stmts: &mut [Statement<'a>]) { ... }
    ```
-   ドライバ `transform_expression` は **enter → 子を再帰 → exit** の順。`VisitMut` (フック1個) との差はこの2段。
-5. お題 A: **定数畳み込み** (`1 + 2` → `3` を `exit_expression` で。子を畳んでから親 = post-order)
-6. お題 B: **素朴な identifier rename** (`enter_expression` で同名を全置換。スコープ無視の単純版)
-7. **enter vs exit デモ** — 同じ木で enter 版 / exit 版の結果差を見る (`const`→`let` は AST に `let` が無いので、ここを数値2倍などの小ネタで埋める)
-8. **pipeline** — 複数 transformer を順に繋ぐ (fold → rename を1パスで)
+5. 定数畳み込み: `exit_expression` で `1 + 2` → `3` (post-order、`*expr = Number{..}`)。
+6. 素朴 rename: `enter_expression` で同名を全置換 (`Atom::new_in(bump, ..)`)。
+7. enter vs exit デモ: 同じ木で結果差を見る (数値2倍など)。
+8. pipeline: 複数 transformer を順に繋ぐ。
 
-**Phase 5 — scope-aware rename (`naming_span.rs` 利用)**
+**Phase 5 — scope-aware rename**
 
-9. お題 C: **正しい rename** — `naming_span` の `HashMap<Span, SymbolId>` を引き、「目的の `SymbolId` に解決される identifier だけ」を置換。
-   素朴版 (お題 B) との違い (シャドーイングを正しく扱う) を対比する。
+9. `naming_arena` が埋めた id を直読みし、「目的の `SymbolId` に解決される使用 + その宣言だけ」を置換。素朴版 (6) との違い (シャドーイング) を対比。
 
-**Phase 6 — `src/monomorphize_v2.rs`**
+**Phase 6 — `monomorphize_v2.rs`**
 
-10. 既存 `monomorphize.rs` (専用 transformer) を `Transformer` trait で書き直して並置。
-    専用 vs 汎用の設計トレードオフを体感する。
-
-### 学習ポイント
-
-- span 付き AST 上に naming を一本化する設計 (oxc `oxc_semantic` の index 部分)
-- enter / exit の 2 段フックがあると何が表現できるか (children 走査前後)
-- 「自分自身を別ノードに差し替える」パターン (`*expr = new_expr;`)
-- 素朴 rename と symbol-aware rename の違い (シャドーイング)
-- AST に id を埋めず外部 `HashMap<Span, SymbolId>` で紐付ける設計 (vs oxc の AST 内 Cell)
-- 複数 transformer を pipeline で繋ぐ発想
-- 専用 (monomorphize) vs 汎用 (Transformer trait) の設計対比
+10. `monomorphize.rs` を `Transformer<'a>` trait で書き直して並置。専用 vs 汎用の対比。
 
 ### 読書 TODO
 
-- [ ] [oxc_transformer](https://github.com/oxc-project/oxc/tree/main/crates/oxc_transformer) — Babel 互換の transformer フレームワーク
-- [ ] [swc_ecma_transforms](https://github.com/swc-project/swc/tree/main/crates/swc_ecma_transforms) — 設計対比
+- [ ] [oxc_transformer](https://github.com/oxc-project/oxc/tree/main/crates/oxc_transformer) — arena AST を `&mut` で書き換える本物
+- [ ] [oxc_allocator](https://github.com/oxc-project/oxc/tree/main/crates/oxc_allocator) — oxc の `Box<'a>` / `Vec<'a>` (bumpalo ラッパ)
 
 ---
 
@@ -675,22 +648,17 @@ index 型の旨味:
 - ✅ Span (位置を返すのに必須)
 - ✅ Result エラー (panic だと LSP プロセスが落ちる)
 - ✅ Index 型 (節 10 の symbol table が go-to-definition に直結)
-- ✅ **span 付き naming (`naming_span.rs`)** — 節12 で前倒し実装済み
+- ✅ **span 付き naming (`naming_arena.rs`)** — 節12 で前倒し実装
 
 **parse が通った時だけ動けばよい** スタンスでいく。タイピング中の壊れたコードへの対応 (resilient parsing) は要求しない。
 
-### 前段タスク (節12 で前倒し済み): span 付き naming
+### 前段タスク (節12 で前倒し): span 付き naming
 
 go-to-definition は「カーソル位置 (span) → どの宣言か (symbol)」を解くので、**span と symbol の両方**が要る。
-節10 `naming_indexed` は `crate::parse` AST 上で span を持たず、節11 `lint` は span 付きだが自前のミニ symbol table を
-持つ、という分裂状態だった。
+節12 で可変 arena AST + `naming_arena.rs` を作り、AST ノードの `Cell<Option<SymbolId>>` に id を埋める形にした。
+LSP の go-to-definition はこのノードの id (使用 → `ReferenceId` → 解決先 `SymbolId` → 宣言ノードの span) を辿る。
 
-これを **節12 で `src/naming_span.rs` として一本化済み**: `ast_span` AST の上に index 型 naming を作り直し、
-`HashMap<Span, SymbolId>` の外部マップで「identifier ノード → symbol」を引けるようにした (`ast_span` は不改造)。
-LSP の go-to-definition はこの `naming_span` の索引 (span → SymbolId → 宣言 span) をそのまま使う。
-
-> なお節11 `lint` の `no-unused-vars` を `naming_span` に載せ替える「消費側の一本化」は未了 (lint は触らない並置方針)。
-> linter / transformer / LSP が 1 つの naming を共有する形に寄せたければ、ここで lint も差し替える。
+> なお節11 `lint` の `no-unused-vars` を `naming_arena` に載せ替える「消費側の一本化」は未了 (lint は触らない並置方針)。
 
 ### スコープ
 
@@ -793,9 +761,9 @@ workspace 化しても各 crate の中で `parse.rs` / `parse_pratt.rs` / `parse
 | 9. String interning (Atom) | 2〜3 時間 | ✅ 実績 (Atom + Interner + parser 統合, ptr 共有を実証) |
 | 10. Index 型 | 3〜4 時間 | ✅ 実績 (Symbol/Scope/Reference + SemanticBuilder, 旧版と同値) |
 | 11. Linter | 3〜4 時間 | ✅ 実績 (constant-condition / unreachable-code / no-unused-vars の 3 ルール) |
-| 12. Transformer (+ naming_span 前倒し) | 6〜9 時間 | naming_span + Transformer + rename + monomorphize_v2 |
+| 12. Transformer (oxc 忠実: 可変 arena) | 1〜2 日 | 可変 arena AST + naming_arena + Transformer(`'a`) + rename + monomorphize_v2 |
 | 13. Formatter (浅め) | 3〜5 時間 | |
-| 14. LSP Phase 1 | 1〜2 日 | naming_span は節12 で済。プロトコル立ち上げが重い |
+| 14. LSP Phase 1 | 1〜2 日 | naming は節12 で済。プロトコル立ち上げが重い |
 | 15. Workspace 分割 | 2〜3 時間 | |
 
 残タスクの素直な合計はおよそ **5〜8 日分** (1〜3 と同じペースを前提に、8 / 14 だけ重め)。週末ベースなら 2〜4 週間程度。
