@@ -503,11 +503,23 @@ index 型の旨味:
 
 ---
 
-## 11. Linter
+## 11. Linter ✅(実装済み)
 
-新規ファイル: `src/lint.rs`
+実装ファイル: [`src/lint.rs`](../src/lint.rs)
+解説: [linter.md](./linter.md)
 
-ねらい: visit パターン (節 4) と index 型 (節 8) の応用。
+ねらい: visit パターン (節 5) と symbol table (節 10) の応用。`ast_span` AST の上に、
+**ルール毎に visitor を 1 個** 作るスタイルで linter を組む。
+
+> 到達点: `LintWarning { rule_name, message, span }` と `lint()` エントリ + 3 ルールを実装。
+> - `constant-condition` — 三項の test が真偽値リテラル (`true ? a : b`)。Visit だけ。
+> - `unreachable-code` — `return` より後の文。body の Vec を走る。Visit だけ。
+> - `no-unused-vars` — 宣言されたが参照されない変数。**symbol table が要る**。
+>
+> 学び: ① symbol table が要るルール (no-unused-vars) と要らないルール (他 2 つ) で実装が分かれる、
+> ② 節 10 の `naming_indexed` は `crate::parse` AST 上で span を持たないため、span 付き警告を出す
+> no-unused-vars は `ast_span` 上に `used: bool` 付きの最小 symbol table を作り直した、
+> ③ 「集めるパス (declare/mark_used) と報告するパス (leave_scope で未使用回収)」を分ける発想。
 
 ### 最初のステップ
 
@@ -621,9 +633,32 @@ index 型の旨味:
 
 - ✅ Span (位置を返すのに必須)
 - ✅ Result エラー (panic だと LSP プロセスが落ちる)
-- ✅ Index 型 (節 8 の symbol table が go-to-definition に直結)
+- ✅ Index 型 (節 10 の symbol table が go-to-definition に直結)
+- ⬜ **span 付き AST 上の semantic への一本化** (下記、この節の前段でやる)
 
 **parse が通った時だけ動けばよい** スタンスでいく。タイピング中の壊れたコードへの対応 (resilient parsing) は要求しない。
+
+### 前段タスク: span 付き semantic への一本化
+
+go-to-definition は「カーソル位置 (span) → どの宣言か (symbol)」を解くので、**span と symbol の両方**が要る。
+ところが現状、symbol table が AST レイヤで分裂している:
+
+| | 乗っている AST | span | identifier |
+|---|---|---|---|
+| 節 10 `naming_indexed` | `crate::parse` | **なし** | `Identifier(String)` |
+| 節 11 `lint` の `no-unused-vars` | `ast_span` | あり | `Identifier { name, span }` |
+
+節 11 は `LintWarning` に span が要るのに `naming_indexed` が span を持たないため、`no-unused-vars` 内に
+**span 付きのミニ symbol table を再実装**している (節 10 の*発想*は流用したが*コード*は流用できていない)。
+
+oxc の `oxc_semantic` は「**span 付き AST の上に semantic を 1 個だけ載せ、linter / transformer / LSP が全部それを参照する**」形。
+LSP に入る前にここへ寄せる:
+
+1. `naming_indexed` を `ast_span` AST の上に作り直す (`Symbol` に span を持たせる)。新規 `src/semantic.rs` 想定。
+2. 節 11 `lint` の `no-unused-vars` を、その共有 semantic を使う形に差し替える (自前 symbol table を消す)。
+3. その semantic を go-to-definition の索引 (span → SymbolId → 宣言 span) に使う。
+
+並置スタイルは維持しつつ、「symbol table だけは span 付き AST 上に一本化する」のが狙い。
 
 ### スコープ
 
@@ -725,7 +760,7 @@ workspace 化しても各 crate の中で `parse.rs` / `parse_pratt.rs` / `parse
 | 8. Arena allocator (実装) | 1 日〜2 日 | ✅ 実績 (span 版を `&'a` 化、`'a` の伝染を体得) |
 | 9. String interning (Atom) | 2〜3 時間 | ✅ 実績 (Atom + Interner + parser 統合, ptr 共有を実証) |
 | 10. Index 型 | 3〜4 時間 | ✅ 実績 (Symbol/Scope/Reference + SemanticBuilder, 旧版と同値) |
-| 11. Linter | 3〜4 時間 | ルール数しだい |
+| 11. Linter | 3〜4 時間 | ✅ 実績 (constant-condition / unreachable-code / no-unused-vars の 3 ルール) |
 | 12. Transformer | 3〜5 時間 | |
 | 13. Formatter (浅め) | 3〜5 時間 | |
 | 14. LSP Phase 1 | 1〜2 日 | プロトコル立ち上げが重い |
