@@ -506,6 +506,7 @@ index 型の旨味:
 ## 11. Linter ✅(実装済み)
 
 実装ファイル: [`src/lint.rs`](../src/lint.rs)
+解説: [linter.md](./linter.md)
 
 ねらい: visit パターン (節 5) と symbol table (節 10) の応用。`ast_span` AST の上に、
 **ルール毎に visitor を 1 個** 作るスタイルで linter を組む。
@@ -632,9 +633,32 @@ index 型の旨味:
 
 - ✅ Span (位置を返すのに必須)
 - ✅ Result エラー (panic だと LSP プロセスが落ちる)
-- ✅ Index 型 (節 8 の symbol table が go-to-definition に直結)
+- ✅ Index 型 (節 10 の symbol table が go-to-definition に直結)
+- ⬜ **span 付き AST 上の semantic への一本化** (下記、この節の前段でやる)
 
 **parse が通った時だけ動けばよい** スタンスでいく。タイピング中の壊れたコードへの対応 (resilient parsing) は要求しない。
+
+### 前段タスク: span 付き semantic への一本化
+
+go-to-definition は「カーソル位置 (span) → どの宣言か (symbol)」を解くので、**span と symbol の両方**が要る。
+ところが現状、symbol table が AST レイヤで分裂している:
+
+| | 乗っている AST | span | identifier |
+|---|---|---|---|
+| 節 10 `naming_indexed` | `crate::parse` | **なし** | `Identifier(String)` |
+| 節 11 `lint` の `no-unused-vars` | `ast_span` | あり | `Identifier { name, span }` |
+
+節 11 は `LintWarning` に span が要るのに `naming_indexed` が span を持たないため、`no-unused-vars` 内に
+**span 付きのミニ symbol table を再実装**している (節 10 の*発想*は流用したが*コード*は流用できていない)。
+
+oxc の `oxc_semantic` は「**span 付き AST の上に semantic を 1 個だけ載せ、linter / transformer / LSP が全部それを参照する**」形。
+LSP に入る前にここへ寄せる:
+
+1. `naming_indexed` を `ast_span` AST の上に作り直す (`Symbol` に span を持たせる)。新規 `src/semantic.rs` 想定。
+2. 節 11 `lint` の `no-unused-vars` を、その共有 semantic を使う形に差し替える (自前 symbol table を消す)。
+3. その semantic を go-to-definition の索引 (span → SymbolId → 宣言 span) に使う。
+
+並置スタイルは維持しつつ、「symbol table だけは span 付き AST 上に一本化する」のが狙い。
 
 ### スコープ
 
