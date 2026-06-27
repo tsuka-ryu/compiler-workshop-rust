@@ -6,6 +6,7 @@ pub mod ast_resilient;
 pub mod atom;
 pub mod ast_span;
 pub mod diagnostics;
+pub mod js;
 pub mod lint;
 pub mod monomorphize;
 pub mod naming;
