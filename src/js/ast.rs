@@ -45,6 +45,13 @@ pub struct Program {
 pub enum Statement {
     VariableDeclaration(Box<VariableDeclaration>),
     ExpressionStatement(Box<ExpressionStatement>),
+    DebuggerStatement(Box<DebuggerStatement>),
+}
+
+/// `debugger;`。章で「最も簡単な文」として最初にパースされる例。
+#[derive(Debug, Clone, PartialEq)]
+pub struct DebuggerStatement {
+    pub node: Node,
 }
 
 /// `var a`, `let b = 1`, `const c = 2` のような変数宣言。
@@ -89,7 +96,11 @@ pub struct ExpressionStatement {
 pub enum Expression {
     NumberLiteral(Box<NumberLiteral>),
     StringLiteral(Box<StringLiteral>),
+    BooleanLiteral(Box<BooleanLiteral>),
     Identifier(Box<IdentifierReference>),
+    UnaryExpression(Box<UnaryExpression>),
+    BinaryExpression(Box<BinaryExpression>),
+    ConditionalExpression(Box<ConditionalExpression>),
     AwaitExpression(Box<AwaitExpression>),
     YieldExpression(Box<YieldExpression>),
 }
@@ -106,6 +117,63 @@ pub struct NumberLiteral {
 pub struct StringLiteral {
     pub node: Node,
     pub value: String,
+}
+
+/// 真偽値リテラル。`true`, `false`。
+#[derive(Debug, Clone, PartialEq)]
+pub struct BooleanLiteral {
+    pub node: Node,
+    pub value: bool,
+}
+
+/// 前置単項式。`-x`, `+x`。
+#[derive(Debug, Clone, PartialEq)]
+pub struct UnaryExpression {
+    pub node: Node,
+    pub operator: UnaryOperator,
+    pub argument: Expression,
+}
+
+/// 単項演算子。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnaryOperator {
+    /// `-`
+    Minus,
+    /// `+`
+    Plus,
+}
+
+/// 二項式。`a + b`, `2 ** 3` など。
+#[derive(Debug, Clone, PartialEq)]
+pub struct BinaryExpression {
+    pub node: Node,
+    pub left: Expression,
+    pub operator: BinaryOperator,
+    pub right: Expression,
+}
+
+/// 二項演算子。優先順位と結合性はパーサー側 (Pratt) で扱う。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BinaryOperator {
+    /// `+`
+    Addition,
+    /// `-`
+    Subtraction,
+    /// `*`
+    Multiplication,
+    /// `/`
+    Division,
+    /// `**` (右結合)
+    Exponentiation,
+}
+
+/// 三項条件式。`test ? consequent : alternate`。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConditionalExpression {
+    pub node: Node,
+    pub test: Expression,
+    pub consequent: Expression,
+    pub alternate: Expression,
 }
 
 /// 参照としての識別子 (estree では `Identifier`)。
