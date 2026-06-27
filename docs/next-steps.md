@@ -1,5 +1,9 @@
 # 今後の予定
 
+> **【放棄】このロードマップ (toy 言語の技術ツアー) は節11 まで実装した時点で打ち切り。**
+> 以降は [js-parser-roadmap.md](./js-parser-roadmap.md) (javascript-parser-in-rust を読みながら
+> 本物の JS subset パーサーを作る 2 周目) に乗り換えた。本ファイルは完了済み節 (1〜11) の記録として残す。
+
 このリポジトリでさらに学習を進めるためのロードマップ。実用 parser / compiler の定番テクニックを一通り触る。各節の最後に、対応する [oxc](https://github.com/oxc-project/oxc) の crate を参考実装として挙げている。
 
 > oxc の実ソースを読むときの前提知識(自動生成・独自 Box/Vec など、コードベース固有の事情)は別軸なので [docs/reading-oxc.md](./reading-oxc.md) にまとめた。各節の「読書 TODO」をやる前に通しておくと迷子になりにくい。
