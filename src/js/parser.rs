@@ -176,8 +176,23 @@ impl<'a> Parser<'a> {
         match self.cur_kind() {
             Kind::Var | Kind::Let | Kind::Const => self.parse_variable_declaration(),
             Kind::Debugger => self.parse_debugger_statement(),
+            Kind::LCurly => self.parse_block_statement(),
             _ => self.parse_expression_statement(),
         }
+    }
+
+    fn parse_block_statement(&mut self) -> Result<Statement> {
+        let node = self.start_node();
+        self.expect(Kind::LCurly)?;
+        let mut body = Vec::new();
+        while !self.at(Kind::RCurly) && !self.at(Kind::Eof) {
+            body.push(self.parse_statement()?);
+        }
+        self.expect(Kind::RCurly)?;
+        Ok(Statement::BlockStatement(Box::new(BlockStatement {
+            node: self.finish_node(node),
+            body,
+        })))
     }
 
     fn parse_debugger_statement(&mut self) -> Result<Statement> {

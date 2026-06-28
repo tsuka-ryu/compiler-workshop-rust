@@ -46,12 +46,20 @@ pub enum Statement {
     VariableDeclaration(Box<VariableDeclaration>),
     ExpressionStatement(Box<ExpressionStatement>),
     DebuggerStatement(Box<DebuggerStatement>),
+    BlockStatement(Box<BlockStatement>),
 }
 
 /// `debugger;`。章で「最も簡単な文」として最初にパースされる例。
 #[derive(Debug, Clone, PartialEq)]
 pub struct DebuggerStatement {
     pub node: Node,
+}
+
+/// ブロック文。`{ ... }`。新しい lexical スコープを作る (semantic 章で使う)。
+#[derive(Debug, Clone, PartialEq)]
+pub struct BlockStatement {
+    pub node: Node,
+    pub body: Vec<Statement>,
 }
 
 /// `var a`, `let b = 1`, `const c = 2` のような変数宣言。
