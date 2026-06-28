@@ -1,4 +1,11 @@
-# JS パーサー学習メモ (javascript-parser-in-rust)
+# JS パーサー学習メモ (javascript-parser-in-rust) ✅完了
+
+> **【完了】2026-06-28: チュートリアル本文 (overview〜typescript) を全章読了、**
+> **JS subset パーサー (lexer / ast / parser / errors核 / semantic) を実装済み。**
+> typescript 章は概念読了のみ (発展なので実装はしない方針どおり未着手)。
+> miette / arena / interning は方針どおり本体には組み込まず (下記「注意点」参照)。
+> 次の学習: oxc の Architecture / ECMAScript / Performance / 本体ソース
+> → 読書計画は [oxc-reading-plan.md](./oxc-reading-plan.md)。
 
 [oxc-project/javascript-parser-in-rust](https://github.com/oxc-project/javascript-parser-in-rust)
 (日本語版あり) を**そのまま上から読んで実装する**。これは進捗ダッシュボードではなく、
@@ -24,16 +31,16 @@ src/js/
 
 ## 章 ↔ ファイル対応
 
-| 元チュートリアル章 | 作る/育てるファイル | メモ |
-|---|---|---|
-| overview | — | 概念のみ (読むだけ) |
-| lexer | `js/lexer.rs` | `Chars` + offset / peek / keyword / `TokenValue`。interning はここに編集で |
-| ast | `js/ast.rs` | `Node` / estree / `Box` / enum サイズ / serde はここに編集で |
-| parser | `js/parser.rs` | 再帰下降 + Pratt (式) |
-| errors | `js/parser.rs` | `Result` / `expect` / `SyntaxError` / miette をパーサーに編集で |
-| semantic_analysis | `js/semantic.rs` | scope tree + visitor。解説: [semantic-analysis.md](./semantic-analysis.md) (toy 版含む) |
-| typescript | `js/ts.rs` | lookahead / arrow backtracking (発展、深追いしない) |
-| references | — | 読書のみ |
+| 元チュートリアル章 | 作る/育てるファイル | 状態 | メモ |
+|---|---|---|---|
+| overview | — | ✅読了 | 概念のみ (読むだけ) |
+| lexer | `js/lexer.rs` | ✅実装 | `Chars` + offset / peek / keyword / `TokenValue`。interning は方針どおり未組込 |
+| ast | `js/ast.rs` | ✅実装 | `Node` / estree / `Box` / enum サイズ。serde / arena は方針どおり未組込 |
+| parser | `js/parser.rs` | ✅実装 | 再帰下降 + Pratt (式) |
+| errors | `js/parser.rs` | ✅核実装 | `Result` / `expect` / `SyntaxError` (手書き Error)。miette は未組込 |
+| semantic_analysis | `js/semantic.rs` | ✅実装 | scope tree + visitor。解説: [semantic-analysis.md](./semantic-analysis.md) (toy 版含む) |
+| typescript | (未作成) | 📖読了のみ | lookahead / arrow backtracking。発展なので実装は見送り |
+| references | — | ✅読了 | 読書のみ |
 
 ## 注意点 (チュートリアルそのままで OK な箇所)
 
