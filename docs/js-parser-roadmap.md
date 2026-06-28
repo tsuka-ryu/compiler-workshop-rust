@@ -31,7 +31,7 @@ src/js/
 | ast | `js/ast.rs` | `Node` / estree / `Box` / enum サイズ / serde はここに編集で |
 | parser | `js/parser.rs` | 再帰下降 + Pratt (式) |
 | errors | `js/parser.rs` | `Result` / `expect` / `SyntaxError` / miette をパーサーに編集で |
-| semantic_analysis | `js/semantic.rs` | scope tree + visitor |
+| semantic_analysis | `js/semantic.rs` | scope tree + visitor。解説: [semantic-analysis.md](./semantic-analysis.md) (toy 版含む) |
 | typescript | `js/ts.rs` | lookahead / arrow backtracking (発展、深追いしない) |
 | references | — | 読書のみ |
 
