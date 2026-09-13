@@ -1,0 +1,2 @@
+[checkpoint] at offset 0 (Ident)
+[checkpoint] at offset 1 (LAngle)

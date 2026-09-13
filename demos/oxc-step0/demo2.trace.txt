@@ -1,0 +1,3 @@
+[checkpoint] at offset 0 (Ident)
+[checkpoint] at offset 2 (LAngle)
+[rewind] 8 -> 2 (offset)

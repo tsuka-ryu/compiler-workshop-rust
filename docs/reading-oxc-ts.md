@@ -125,7 +125,7 @@ parse_ts_type                     … conditional (`X extends Y ? A : B`) は最
 
 ## 進捗
 
-- [ ] Session 0: checkpoint / rewind / re-lex
+- [x] Session 0: checkpoint / rewind / re-lex (メモ: [reading-oxc-ts-notes.md](reading-oxc-ts-notes.md))
 - [ ] Session 1: 型式コア (parse_ts_type → non_array)
 - [ ] Session 2: mapped / tuple / template / predicate / infer
 - [ ] Session 3: signature member / try_parse_type_arguments

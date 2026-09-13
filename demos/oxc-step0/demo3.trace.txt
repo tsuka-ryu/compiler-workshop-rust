@@ -1,0 +1,2 @@
+[checkpoint] at offset 0 (Type)
+[re-lex L] splitting compound token at offset 12

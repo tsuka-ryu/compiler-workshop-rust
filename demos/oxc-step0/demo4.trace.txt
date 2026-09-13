@@ -1,0 +1,2 @@
+[checkpoint] at offset 0 (Type)
+[checkpoint] at offset 31 (Ident)
