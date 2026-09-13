@@ -45,10 +45,12 @@ parse_ts_type                          types.rs:15   … conditional は最上�
 - [x] 1.1 `parse_ts_type` (15-44) — 3ブロック構造 (関数型分岐 / union 呼び出し / conditional)。
       `DisallowConditionalTypes` の付け外し、`extends` 前の改行ガード。
       実証: demos/oxc-step1 (ネスト禁止 / 改行 / `extends` メンバー名)
-- [ ] 1.2 `parse_function_or_constructor_type` (46-84) +
-      `is_start_of_function_type_or_constructor_type` (86-) —
-      `(` を見た瞬間には決められない問題を lookahead でどう解くか。
-      `parse_ts_type_parameters` (145) もここで
+- [x] 1.2 `parse_function_or_constructor_type` (46-84) +
+      `is_start_of_function_type_or_constructor_type` (86-143) —
+      判定コスト3段 (`<`/`new` 即答 / `abstract` は peek / `(` だけ投機)、
+      括弧型 vs 関数型を分ける最小の証拠4パターン、`skip_parameter_start` の
+      「エラー件数が増えなければ成功」判定。メモ参照
+      (`parse_ts_type_parameters` (145) は未読、必要になったら)
 - [ ] 1.3 union → intersection → type_operator (241-357) —
       先頭の `|` `&` を許す処理、keyof/unique/readonly の前置演算子
 - [ ] 1.4 `parse_postfix_type_or_higher` (358) + `parse_non_array_type` (411) の match を地図として眺める —

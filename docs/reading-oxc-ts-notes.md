@@ -257,6 +257,54 @@ dangling else は「近い方に付ける」慣習で解決したが、TS は **
 ASI 的裁定 (demo5)。代償: conditional の `extends` を行頭に折り返せない (demo4 はエラー。
 prettier が `T extends` を同じ行に保つのは文法上の制約だった)
 
+### 1.2 関数型/コンストラクタ型 (types.rs:46-143)
+
+#### 判定は「コストの安い順に3段」— 全部 rewind するわけではない
+
+`is_start_of_function_type_or_constructor_type` (86) の match は判定コストで並んでいる:
+
+| トークン | 判定方法 | コスト |
+|---|---|---|
+| `<` / `new` (88) | 現在トークンだけで即 true | checkpoint すら取らない |
+| `abstract` (89) | `peek_token()` で次が `new` か見るだけ | パーサー状態は動かさない |
+| `(` (90-120) | **checkpoint → 投機 → 必ず rewind** | 唯一の投機パース |
+| それ以外 (121) | 即 false | — |
+
+`<` が即 true でいい理由: **`<` で始まる型は関数型しかない**。`parse_non_array_type`
+(411-506) の match に `Kind::LAngle` の腕がない (`Foo<T>` は先頭が識別子)。
+「`=` から始まる型はない」と同じ読み方。文法が曖昧でない場所では投機しない、が徹底されている。
+
+#### `(` の投機: 括弧型 vs 関数型を分ける「最小の証拠」4パターン
+
+`(A | B)` (括弧型) と `(x: T) => U` (関数型) の判別。全部読まずに証拠1個で即決:
+
+1. `()` / `(...` (95) → 引数リスト確定 (空の型は書けない、rest は引数だけ)
+2. `(x:` `(x,` `(x?` `(x=` (104-107) → これらの記号は括弧型の中に現れえない
+   → `x` は型ではなく **引数名** だったと確定
+3. `(x) =>` (112) → 2 で決まらないとき。`)` の次の `=>` まで見る
+4. どれでもない → 括弧型 (`(A | B)` は `A` の後が `|` なので 2 に該当せず、`)` の後も `=>` でない)
+
+`can_follow_type_arguments_in_expr` (Session 0) と同じ思想 = **判定に必要な最小限だけ読んで即 rewind**。
+
+#### `skip_parameter_start` (125-143) の見どころ
+
+- modifier を先に飛ばす (127) — `(private x: number)` パラメータプロパティ用 (Session 6)
+- `this` を許す (131) — `(this: Foo) => void`
+- 分割代入 `({a, b}: T) => U` は **実際にパースを試して判定** (135-141)。
+  成功条件が「fatal error なし **かつ エラー件数が増えていない**」。
+  Session 0 で読んだ「checkpoint はエラー件数を保存して truncate で戻す」仕組みが、
+  ここでは **判定条件そのもの** として使われている
+
+#### 本体 `parse_function_or_constructor_type` (46-84) は読む順=文法規則
+
+`abstract` → `new` → `<T>` → `(params)` → `=> ReturnType` の順に食べるだけ。
+
+- 48-49: `abstract new () => T` という並びしか許されないことがコードの順序に出ている
+- **51: `context_remove(DisallowConditionalTypes)`** — 引数リストの中は conditional 解禁
+  (`(x: T extends U ? A : B) => void` が書ける)。1.1 で見たフラグのもう1つの解除ポイント
+- 61-65: `new (this: number) => any` は違法 → パースは共通関数でやり、
+  **違法な組み合わせは後から検査** する作り
+
 ### Identifier と IdentifierName — 予約語なのに `extends: number` が書ける理由
 
 JS の文法には「名前」が2種類ある:
