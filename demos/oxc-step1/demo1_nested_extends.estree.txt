@@ -1,0 +1,18 @@
+TS-ESTree AST:
+{
+  "type": "Program",
+  "body": [],
+  "sourceType": "script",
+  "hashbang": null,
+  "start": 0,
+  "end": 0
+}
+
+  x Expected `?` but found `extends`
+   ,----
+ 1 | type Q1<T,U,V,X,Y> = T extends U extends V ? X : Y;
+   :                                  ^^^|^^^
+   :                                     `-- `?` expected
+   `----
+
+Parsed with Errors.

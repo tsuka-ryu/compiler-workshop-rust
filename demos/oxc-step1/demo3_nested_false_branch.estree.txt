@@ -1,0 +1,138 @@
+TS-ESTree AST:
+{
+  "type": "Program",
+  "body": [
+    {
+      "type": "TSTypeAliasDeclaration",
+      "id": {
+        "type": "Identifier",
+        "decorators": [],
+        "name": "Q3",
+        "optional": false,
+        "typeAnnotation": null,
+        "start": 5,
+        "end": 7
+      },
+      "typeParameters": {
+        "type": "TSTypeParameterDeclaration",
+        "params": [
+          {
+            "type": "TSTypeParameter",
+            "name": {
+              "type": "Identifier",
+              "decorators": [],
+              "name": "T",
+              "optional": false,
+              "typeAnnotation": null,
+              "start": 8,
+              "end": 9
+            },
+            "constraint": null,
+            "default": null,
+            "in": false,
+            "out": false,
+            "const": false,
+            "start": 8,
+            "end": 9
+          }
+        ],
+        "start": 7,
+        "end": 10
+      },
+      "typeAnnotation": {
+        "type": "TSConditionalType",
+        "checkType": {
+          "type": "TSTypeReference",
+          "typeName": {
+            "type": "Identifier",
+            "decorators": [],
+            "name": "T",
+            "optional": false,
+            "typeAnnotation": null,
+            "start": 13,
+            "end": 14
+          },
+          "typeArguments": null,
+          "start": 13,
+          "end": 14
+        },
+        "extendsType": {
+          "type": "TSStringKeyword",
+          "start": 23,
+          "end": 29
+        },
+        "trueType": {
+          "type": "TSLiteralType",
+          "literal": {
+            "type": "Literal",
+            "value": 1,
+            "raw": "1",
+            "start": 32,
+            "end": 33
+          },
+          "start": 32,
+          "end": 33
+        },
+        "falseType": {
+          "type": "TSConditionalType",
+          "checkType": {
+            "type": "TSTypeReference",
+            "typeName": {
+              "type": "Identifier",
+              "decorators": [],
+              "name": "T",
+              "optional": false,
+              "typeAnnotation": null,
+              "start": 36,
+              "end": 37
+            },
+            "typeArguments": null,
+            "start": 36,
+            "end": 37
+          },
+          "extendsType": {
+            "type": "TSNumberKeyword",
+            "start": 46,
+            "end": 52
+          },
+          "trueType": {
+            "type": "TSLiteralType",
+            "literal": {
+              "type": "Literal",
+              "value": 2,
+              "raw": "2",
+              "start": 55,
+              "end": 56
+            },
+            "start": 55,
+            "end": 56
+          },
+          "falseType": {
+            "type": "TSLiteralType",
+            "literal": {
+              "type": "Literal",
+              "value": 3,
+              "raw": "3",
+              "start": 59,
+              "end": 60
+            },
+            "start": 59,
+            "end": 60
+          },
+          "start": 36,
+          "end": 60
+        },
+        "start": 13,
+        "end": 60
+      },
+      "declare": false,
+      "start": 0,
+      "end": 61
+    }
+  ],
+  "sourceType": "script",
+  "hashbang": null,
+  "start": 0,
+  "end": 61
+}
+Parsed Successfully.

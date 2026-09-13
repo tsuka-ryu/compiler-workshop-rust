@@ -1,0 +1,18 @@
+TS-ESTree AST:
+{
+  "type": "Program",
+  "body": [],
+  "sourceType": "script",
+  "hashbang": null,
+  "start": 0,
+  "end": 0
+}
+
+  x Unexpected token
+   ,-[2:1]
+ 1 | type X<T> = T
+ 2 | extends string ? 1 : 0;
+   : ^^^^^^^
+   `----
+
+Parsed with Errors.

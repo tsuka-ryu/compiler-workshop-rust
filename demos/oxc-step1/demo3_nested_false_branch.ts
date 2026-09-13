@@ -1,0 +1,1 @@
+type Q3<T> = T extends string ? 1 : T extends number ? 2 : 3;

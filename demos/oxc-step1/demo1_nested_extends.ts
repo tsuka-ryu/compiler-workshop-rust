@@ -1,0 +1,1 @@
+type Q1<T,U,V,X,Y> = T extends U extends V ? X : Y;

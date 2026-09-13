@@ -221,10 +221,98 @@ grep した結果、呼び出しは十数か所で2パターン:
 
 Session 3 ではこの3関数の中身 (成功と判定する条件) を読む。
 
+## Session 1: 型式コア (2026-09-13 開始、15-44行まで)
+
+### parse_ts_type (types.rs:15-44) は「最下位優先度の階層関数」
+
+再帰下降の各階層は「強い階層を呼ぶ + 自分の担当演算子を処理」が定型。
+parse_ts_type は最下位版で、30行が3ブロックに分解できる:
+
+| 行 | 正体 |
+|---|---|
+| 16-18 | 最下位階層の別産品 (関数型/コンストラクタ型) への分岐。`(` では判別できず lookahead (86行、Session 0 の checkpoint 実戦例) |
+| 19-20 | 定型部: `parse_union_type_or_higher` を呼ぶ |
+| 21-42 | 自分の担当演算子 = conditional (`extends ... ? ... :`) |
+
+- 関数型が最下位にいる理由: `=>` の右側がすべてを飲む (`() => A | B` は union を返す関数)
+- conditional が union より上の答え: `A | B extends C ? X : Y` = `(A|B) extends C ? X : Y`。
+  **関数の呼び出し順がそのまま優先順位** (Pratt の優先順位表と対照的)
+- 行番号補正 (現 HEAD): union 245 / intersection 241 / type_operator 282 /
+  postfix 358 / non_array 411。intersection がファイル上 union より先に定義されている罠
+
+### 宿題2問の答え (実証: demos/oxc-step1/)
+
+**Q1: extends 節のネスト禁止 (`DisallowConditionalTypes`) はなぜ** —
+`?` と `extends` の対応付けを決定的にするため。`T extends U extends V ? X : Y` は
+`? X : Y` の付属先が曖昧 (**dangling else の親戚** = 付属先曖昧性)。
+dangling else は「近い方に付ける」慣習で解決したが、TS は **文法を狭めて禁止** を選んだ。
+違い: dangling else はどちらの読みも完結するが、こちらは内側に付けると外側の
+`? :` が不完全になり、遅くて分かりにくい破綻になる。入口で即エラーの方が診断が明快。
+括弧なら OK (demo2)、false 側のチェーンは常時 OK (demo3、三項演算子と同じ右結合)。
+曖昧性対処の道具箱: 投機する (Session 0) / 文法を狭める (これ) / 慣習で裁く (dangling else)
+
+**Q2: `extends` 前の改行チェック (types.rs:22) はなぜ** —
+予約語はメンバー名に使えるので、`a: string` ␤ `extends: number` の `extends` が
+「conditional 開始」か「次のメンバー名」か曖昧になる。改行が来たらメンバー名側に倒す
+ASI 的裁定 (demo5)。代償: conditional の `extends` を行頭に折り返せない (demo4 はエラー。
+prettier が `T extends` を同じ行に保つのは文法上の制約だった)
+
+### Identifier と IdentifierName — 予約語なのに `extends: number` が書ける理由
+
+JS の文法には「名前」が2種類ある:
+
+- **Identifier** (変数などの束縛名): 予約語禁止。`let extends = 1` は SyntaxError
+- **IdentifierName** (プロパティ名・メンバー名・`.` の後): **予約語も OK** (ES5 から)。
+  `obj.extends` / `({ extends: 1 })` / `class C { extends() {} }` は全部合法
+
+直感: 変数名は `extends + 1` のように裸で式に現れるから予約語と衝突するが、
+プロパティ名は常に `.` や `{` の後ろという文脈に守られていて衝突しようがない。
+
+TS 周りの「キーワード」は3階級:
+
+| 階級 | 例 | 変数名 | メンバー名 |
+|---|---|---|---|
+| 完全予約語 | `extends` `class` `if` | ❌ | ✅ |
+| 文脈依存キーワード (JS) | `async` `of` `get` | ✅ | ✅ |
+| 文脈依存キーワード (TS) | `declare` `readonly` `type` `namespace` | ✅ | ✅ |
+
+3段目が Session 4 の主役 (`let declare = 1` すら合法なので毎回 lookahead で判定)。
+demo5 の `extends` は1段目の「予約語だがメンバー名 OK」で JS 由来の普通の挙動。
+
+歴史の連鎖: ES5 が IdentifierName を緩めた → TS がメンバー名に予約語を許す →
+`a: string` ␤ `extends: number` の曖昧性が生まれる → conditional type (TS 2.8) が
+改行ガード (types.rs:22) でツケを払う。もしメンバー名も予約語禁止だったら
+demo4/demo5 の問題ごと存在しなかった
+
+### 文法の決断は全部 tsc 側 — oxc はほぼ逐語訳
+
+parse_ts_type は tsc の `parseTypeWorker` の Rust 移植。対応表:
+`isStartOfFunctionTypeOrConstructorType` ↔ `is_start_of_function_type_or_constructor_type` /
+`noConditionalTypes` 引数 ↔ `Context::DisallowConditionalTypes` フラグ /
+`scanner.hasPrecedingLineBreak()` ↔ `cur_token().is_on_new_line()`。
+conditional type の文法ガード2つは TS 2.8 (2018, conditional type 導入 PR) 時点の
+TS チームの決断。oxc は互換パーサーなので文法を決める権利がなく、
+oxc 側の決断は「どう速く実装するか」だけ、という役割分担で読む。
+
+### LT 材料: 同じ入力、同じ判定、違うエラー回復 (tsc vs oxc)
+
+demo1 (`T extends U extends V ? X : Y`) を両方に食わせた結果:
+
+- **パース判定は完全一致**: tsc `'?' expected. (1005)` / oxc `` Expected `?` but found `extends` ``。
+  逐語訳移植の証拠
+- **エラー後が別世界**:
+  - tsc: 回復して AST を作り続け、checker まで到達 (`Cannot find name 'extends'. (2304)`
+    は意味解析のエラー! hover も `type extends = /*unresolved*/ any` と応答)。
+    壊れたコードでも補完を出す **IDE ファースト** の設計
+  - oxc: fatal error で Program の body が空。主用途 (lint/bundle/format) は
+    正しいコードを速く処理することなので、深い回復に投資しない
+- LT の筋: 「パーサーの互換性とは何か」— 文法判定は 1:1 でも、
+  エラー回復戦略は消費者 (IDE vs ビルドツール) が決める、という対比が1枚で描ける
+
 ## 進捗
 
 - [x] Session 0: checkpoint / rewind / re-lex
-- [ ] Session 1: 型式コア
+- [ ] Session 1: 型式コア (parse_ts_type 15-44 読了、次は union 245 から)
 - [ ] Session 2: 型の難所
 - [ ] Session 3: signature member / try_parse_type_arguments
 - [ ] Session 4: ts/statement.rs + modifiers.rs
