@@ -18,7 +18,7 @@
   - [ ] `js/statement.rs` / `js/declaration.rs` / `js/expression.rs` / `js/operator.rs` — 再帰下降 + Pratt
   - [ ] `error_handler.rs` / `diagnostics.rs` — recoverable/fatal の 2 層
   - [ ] `js/grammar.rs` / `js/arrow.rs` — Cover Grammar / アロー曖昧性 (typescript 章の概念の実物)
-  - [ ] `ts/types.rs` / `ts/statement.rs` / `lexer/typescript.rs` — TS (型パースが本丸・難所)
+  - [ ] `ts/types.rs` / `ts/statement.rs` / `lexer/typescript.rs` — TS (型パースが本丸・難所)。深読みガイド: [reading-oxc-ts.md](./reading-oxc-ts.md)
   - [ ] `jsx/mod.rs` / `lexer/jsx.rs` — JSX (レキサーが文脈で挙動を変える例)
 - [ ] `oxc_ast` — AST 定義。`generated/` (42k) は自動生成なので飛ばし、`ast/` の元定義と builder の要点だけ
 - [ ] `oxc_semantic` — scope / symbol / reference
