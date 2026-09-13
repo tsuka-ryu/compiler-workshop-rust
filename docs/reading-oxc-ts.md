@@ -51,10 +51,25 @@ parse_ts_type                          types.rs:15   … conditional は最上�
       括弧型 vs 関数型を分ける最小の証拠4パターン、`skip_parameter_start` の
       「エラー件数が増えなければ成功」判定。メモ参照
       (`parse_ts_type_parameters` (145) は未読、必要になったら)
-- [ ] 1.3 union → intersection → type_operator (241-357) —
-      先頭の `|` `&` を許す処理、keyof/unique/readonly の前置演算子
+- [x] 1.3 union → intersection → type_operator (241-356) —
+      前半: 階層のつなぎ方を引数で渡す形、先頭の `|` `&`、tsc 未移植マーカーのコメント。
+      後半: 前置演算子は投機不要、`readonly` の事後検査、
+      `parse_constraint_of_infer_type` の「曖昧なときだけ投機」、
+      パーサー/チェッカーの境界線 (`keyof infer U` が通る理由)。メモ・demos 参照
 - [ ] 1.4 `parse_postfix_type_or_higher` (358) + `parse_non_array_type` (411) の match を地図として眺める —
       **match の腕の一覧 = 型の開始トークン集合の定義** という視点で
+
+> 🔖 **次回の再開地点 (2026-09-13 時点)**
+>
+> 1.3 まで読了。次は **1.4** から。
+>
+> ただし 1.3 の最後に読んだ `parse_constraint_of_infer_type` (types.rs:335-356) は
+> 疲れて頭に入りきらなかったので、**軽く復習してから 1.4 に入る**と接続が良い。
+> 要点は「`infer T extends U ? A : B` の `extends` が制約か conditional の一部か」を、
+> **制約として読んでみて直後が `?` なら読みすぎと判断して rewind** する後出し解決。
+> ただし `infer` は普通 conditional の extends 節の中 (= `DisallowConditionalTypes` が立っている)
+> にいるので、その通常経路では曖昧性がなく投機不要 (343-346)。
+> 詳細はメモの「1.3 後半」セクション。
 
 **回収済みの問い**: conditional が union より上の理由 → `(A|B) extends C ? X : Y`。メモ参照。
 **式パーサーとの対比が一番の学び**: 型は演算子が少ないので階層を関数で固定した素朴な再帰下降。

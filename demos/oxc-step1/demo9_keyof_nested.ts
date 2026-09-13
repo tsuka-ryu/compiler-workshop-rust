@@ -1,0 +1,1 @@
+type A<T> = keyof keyof T;

@@ -1,0 +1,1 @@
+type D<T> = T extends infer U extends string ? U : never;

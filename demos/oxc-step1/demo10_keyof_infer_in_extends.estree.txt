@@ -1,0 +1,126 @@
+TS-ESTree AST:
+{
+  "type": "Program",
+  "body": [
+    {
+      "type": "TSTypeAliasDeclaration",
+      "id": {
+        "type": "Identifier",
+        "decorators": [],
+        "name": "B",
+        "optional": false,
+        "typeAnnotation": null,
+        "start": 5,
+        "end": 6
+      },
+      "typeParameters": {
+        "type": "TSTypeParameterDeclaration",
+        "params": [
+          {
+            "type": "TSTypeParameter",
+            "name": {
+              "type": "Identifier",
+              "decorators": [],
+              "name": "T",
+              "optional": false,
+              "typeAnnotation": null,
+              "start": 7,
+              "end": 8
+            },
+            "constraint": null,
+            "default": null,
+            "in": false,
+            "out": false,
+            "const": false,
+            "start": 7,
+            "end": 8
+          }
+        ],
+        "start": 6,
+        "end": 9
+      },
+      "typeAnnotation": {
+        "type": "TSConditionalType",
+        "checkType": {
+          "type": "TSTypeReference",
+          "typeName": {
+            "type": "Identifier",
+            "decorators": [],
+            "name": "T",
+            "optional": false,
+            "typeAnnotation": null,
+            "start": 12,
+            "end": 13
+          },
+          "typeArguments": null,
+          "start": 12,
+          "end": 13
+        },
+        "extendsType": {
+          "type": "TSTypeOperator",
+          "operator": "keyof",
+          "typeAnnotation": {
+            "type": "TSInferType",
+            "typeParameter": {
+              "type": "TSTypeParameter",
+              "name": {
+                "type": "Identifier",
+                "decorators": [],
+                "name": "U",
+                "optional": false,
+                "typeAnnotation": null,
+                "start": 34,
+                "end": 35
+              },
+              "constraint": null,
+              "default": null,
+              "in": false,
+              "out": false,
+              "const": false,
+              "start": 34,
+              "end": 35
+            },
+            "start": 28,
+            "end": 35
+          },
+          "start": 22,
+          "end": 35
+        },
+        "trueType": {
+          "type": "TSLiteralType",
+          "literal": {
+            "type": "Literal",
+            "value": 1,
+            "raw": "1",
+            "start": 38,
+            "end": 39
+          },
+          "start": 38,
+          "end": 39
+        },
+        "falseType": {
+          "type": "TSLiteralType",
+          "literal": {
+            "type": "Literal",
+            "value": 0,
+            "raw": "0",
+            "start": 42,
+            "end": 43
+          },
+          "start": 42,
+          "end": 43
+        },
+        "start": 12,
+        "end": 43
+      },
+      "declare": false,
+      "start": 0,
+      "end": 44
+    }
+  ],
+  "sourceType": "script",
+  "hashbang": null,
+  "start": 0,
+  "end": 44
+}
+Parsed Successfully.

@@ -1,0 +1,1 @@
+type B<T> = T extends keyof infer U ? 1 : 0;

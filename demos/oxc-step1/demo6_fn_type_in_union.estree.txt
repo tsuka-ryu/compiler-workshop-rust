@@ -1,0 +1,17 @@
+TS-ESTree AST:
+{
+  "type": "Program",
+  "body": [],
+  "sourceType": "script",
+  "hashbang": null,
+  "start": 0,
+  "end": 0
+}
+
+  x Unexpected token
+   ,----
+ 1 | type A = string | () => void;
+   :                    ^
+   `----
+
+Parsed with Errors.

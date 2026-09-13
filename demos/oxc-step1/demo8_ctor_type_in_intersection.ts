@@ -1,0 +1,1 @@
+type C = string & new () => void;

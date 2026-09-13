@@ -305,6 +305,197 @@ prettier が `T extends` を同じ行に保つのは文法上の制約だった)
 - 61-65: `new (this: number) => any` は違法 → パースは共通関数でやり、
   **違法な組み合わせは後から検査** する作り
 
+### 1.3 union / intersection 階層 (types.rs:241-280)
+
+#### 「次に呼ぶ関数」を引数で渡す = 階層のつなぎ方を外から差し替える
+
+union と intersection は構造が完全に同じで、違うのは2点だけ (区切り記号 / 1つ下の階層)。
+なので本体は `parse_union_type_or_intersection_type` (252) 1つで、2点を引数で受け取る:
+
+```rust
+fn parse_intersection_type_or_higher(&mut self) {       // 中身なし、引数を変えて呼ぶだけ
+    self.parse_union_type_or_intersection_type(Kind::Amp, Self::parse_type_operator_or_higher)
+}
+fn parse_union_type_or_higher(&mut self) {
+    self.parse_union_type_or_intersection_type(Kind::Pipe, Self::parse_intersection_type_or_higher)
+}
+```
+
+1.1 の「**次にどの関数を呼ぶか = 優先順位そのもの**」を引数化した形。
+`Self::parse_type_operator_or_higher` はメソッドを関数値として渡す書き方で、
+Session 0 の `lookahead(Self::is_unambiguously_index_signature)` と同じ。
+境界は `F: Fn(&mut Self) -> TSType<'a>` (258)。ジェネリクスなので単相化され、
+関数ポインタ経由にならず抽象化コストはゼロ。
+
+本体 (260-279) の仕掛け2つ:
+- 261 `has_leading_operator` — `type A = | X | Y` の先頭区切り記法。これがあると
+  後続に `|` が無くても union ノードで包む (264 の `|| has_leading_operator`)
+- 264 の条件と 279 — 区切りが1個も無ければ union ノードを作らず **中身をそのまま返す**。
+  階層を何段降りても無駄なノードが積み上がらない
+
+#### コメントアウトされた tsc 原文 = 「未移植」の目印
+
+262 / 268 の `/* hasLeadingOperator && parseFunctionOrConstructorTypeToError(isUnionType) ||*/`
+は **tsc のソースをそのまま貼った未移植マーカー**。キャメルケースの変数名と `||` の結合が
+原文のまま残っている (tsc: `let type = hasLeadingOperator && parseFunctionOrConstructorTypeToError(...) || parseConstituentType();`)。
+逐語訳移植が、移植しなかった箇所すら原文の位置に残すレベルで徹底されている。
+
+tsc 側のその関数はエラーメッセージ品質専用のヘルパー。union/intersection の構成要素に
+括弧なしの関数型を書いた場合を捕まえ、`Function type notation must be parenthesized
+when used in a union type` と名指しで報告する (パースは成功させたうえで診断を出す)。
+括弧が必要な理由は 1.1 の通り **`=>` が右を全部飲む** (関数型は `|` より弱い) から。
+
+実測した診断の差 (どちらも受理はしない。失われるのはメッセージの質だけ):
+
+| 入力 | oxc | tsc |
+|---|---|---|
+| `type A = string \| () => void;` | `Unexpected token` (`)` を指す) | 関数型は括弧で囲め、と名指し |
+| `type C = string & new () => void;` | `Expected a semicolon...` (`(` を指す) | コンストラクタ型は括弧で囲め、と名指し |
+
+oxc では `(` が括弧型の開始として読まれ中身が空でコケる / `new` が型名として読まれた挙句
+ASI エラー、と原因から遠い診断になる。**「tsc は IDE のために回復へ投資、oxc は正しいコードを
+速く」の具体的な証拠品**。同種のコメントは他にもある (`parse_non_array_type` の JSDoc 型
+431-444 など) ので、見かけたら「tsc にはあるが未移植」の目印として読む。
+実証: demos/oxc-step1 の demo6-8 (エラー時は Program の body が空になる点も確認)
+
+#### なぜ移植しなかったのか (推測)
+
+コメントが入ったのは 2024-06-26 の #3903 "improve parsing of TypeScript types"
+(types.rs を tsc の parser.ts に寄せて書き直した大リファクタ)。
+コミット本文は "- [x] fix everything" の一行で、理由は書かれていない。以下は推測だが根拠のある線:
+
+1. **互換性の指標が動かない** — oxc の検証は test262 / babel / TS conformance で、
+   見るのは「パースが通るか否か」。メッセージ文言は比較対象外。今回は受理/拒否の判定が
+   一致しているので、移植してもテスト通過率は1ミリも変わらない
+2. **性能コストが正常系に乗る** (これが一番効いてそう) — tsc の元コードは union/intersection の
+   **構成要素ごとに** `isStartOfFunctionTypeOrConstructorType()` を呼ぶ。1.2 で読んだ通り
+   この判定は `(` で始まるとき checkpoint→投機→rewind の往復をする。つまり
+   `string | (() => void)` という **正しいコード** を書くたびに無駄な投機が1往復増える。
+   エラー時のメッセージのために正常時のホットパスに払う形で、「正しいコードを最速で」と相性が悪い
+3. **fatal error で AST を捨てている** — 丁寧なメッセージを出しても後続の解析は走らない。
+   tsc が回復に投資するのは壊れたコードでも補完/hover を返す必要があるから。oxc にその顧客はいない
+
+まとめ: **コストは正常系、利益は異常系のメッセージだけ、しかもテストで測られない** の三重苦。
+原文をコメントで残したのは「知らずに漏らしたのではなく意図的に省いた」という意思表示と読める。
+なお oxc も必要性の高い診断は独自実装している (1.1 の `expect_conditional_alternative` など)
+ので、診断軽視ではなく **費用対効果で個別判断** しているのが実態に近い。
+
+### 1.3 後半: 前置型演算子と infer (types.rs:282-356)
+
+#### `parse_type_operator_or_higher` (282) は前置演算子の階層
+
+union/intersection が中置だったのに対しこちらは左端に演算子が来る形なので、
+**先頭トークンを見るだけで分岐でき投機不要**: `keyof` / `unique` / `readonly` / `infer`。
+
+`_` の腕 (288-291) で1つ下へ降りるとき **`DisallowConditionalTypes` を外している**。
+この先には括弧 `(...)` や `{...}` という閉じた文脈が来るから。
+`T extends (U extends V ? A : B) ? X : Y` の括弧内が合法なのはこの解除のおかげで、
+逆にフラグが効く範囲は「括弧に入るまでの裸の型式」だけ。
+
+`parse_type_operator` (295) は演算子を1つ食べて **自分自身を再帰呼び出し** (299)。
+`keyof keyof T` が自然に扱える (demo9)。前置演算子階層の定石。
+
+300-305: `readonly` は配列型/タプル型にしか付けられない (`readonly string` は NG) を
+**パース後に検査** して報告。1.2 の `new (this:...)` と同じ「読んでから中身を見る」作り。
+
+#### `parse_constraint_of_infer_type` (335-356) — 曖昧なときだけ投機
+
+`infer T extends U` の `extends` は「U の制約」か「外側 conditional の一部」か2通りに読める。
+解決が2段構え:
+
+1. **曖昧でない場合は投機しない** (343-346) — `infer` は普通 conditional の extends 節にいて、
+   そこは既に `DisallowConditionalTypes` が立っている。後ろに `?` が来ても conditional として
+   再解釈される余地がないので **checkpoint なしで** 制約を読む (demo12 がこの経路)
+2. **曖昧な場合だけ投機** (347-355) — checkpoint を取って制約を読み、直後が `?` なら
+   「この extends は外側のものだった」と判断して rewind し制約なしで返す
+
+doc コメント (326-334) が2ケースを明示。Session 0 の「曖昧でない場所では投機しない」の
+いちばん凝った実例。
+
+#### パーサーとチェッカーの境界線 = ローカルな情報で判定できるか
+
+`type C<T> = keyof infer U;` (demo11) は **oxc がエラーなしで通す**。`infer` は conditional の
+extends 節でしか書けないので TypeScript としては不正だが、これはバグではなく役割分担:
+
+- 判定には **祖先ノードを遡って「自分は conditional の extends 節の中か」を調べる** 必要がある
+  → 木を作り終えてからの仕事 → tsc でも **チェッカー** が報告している
+- 対して 1.2 の `new (this: number) => any` は同じ関数内で `this_param` の有無を見れば済む
+  → **パーサーが報告できる**
+
+この軸は後の Session でも効きそう: **ローカルに閉じる検査はパーサー、木全体を見る検査はチェッカー**。
+
+#### oxc 側の「チェッカー」の実体 (今回の読書範囲外だが、引っ越し先の住所として)
+
+demo11 の TS1338 を実際に出しているのは `oxc_semantic`。実装は文字通り祖先を遡る形
+([checker/typescript.rs:74-84](../../../oxc-project/oxc/crates/oxc_semantic/src/checker/typescript.rs#L74-L84)):
+
+```rust
+let is_in_conditional_extends_clause = ctx.ancestry().ancestor_kinds().any(|kind| {
+    kind.as_ts_conditional_type().is_some_and(|conditional| {
+        conditional.extends_type.span().contains_inclusive(infer_type.span)
+    })
+});
+```
+
+祖先に conditional がいるだけでは不十分 (true/false 節かもしれない) ので、
+**extends 節の span に含まれるか** まで確認しているのが丁寧。診断も
+`ts_error("1338", ...)` と **TS のエラーコードごと移植** (diagnostics.rs:382)。
+1.3 で見た「移植しなかった診断」と対照的で、AST を一度歩く工程のついでに検査できるので安い
+= 費用対効果が合うから実装した、と読める。
+
+紛らわしい3つの別物:
+
+| レイヤー | 実装 | 型情報 | TS1338 |
+|---|---|---|---|
+| `oxc_semantic` | 純 Rust。スコープ/シンボル + **構文的検査** | 使わない | **担当** |
+| `oxc_type_checker` | 純 Rust。doc に "does *not* type check anything yet" と明記された **足場のみ** | まだ無し | 無関係 |
+| oxlint の type-aware ルール | **tsgolint** = 外部実行ファイルを起動 (`executable_path: PathBuf`) | 本物の型 | 無関係 |
+
+tsgolint は typescript-go (tsgo = tsc の Go 移植) の checker を抱えていて、
+`no-floating-promises` のような型が要るルールを担当する。つまり oxc は
+**型が要る仕事だけ本家に外注** している。パーサーは全ファイルが必ず通るので 1:1 移植する
+価値があるが、型チェッカーは実装コストが桁違いで tsgo 自体も十分速い、という判断だろう。
+
+更新版の境界線:
+- ローカルに判定できる → **パーサー** (`readonly string`, `new (this:...)`)
+- 木全体を見れば分かる → **oxc_semantic** (`infer` の位置, TS1338)
+- 型を知る必要がある → **tsgolint 経由で tsgo** (oxc 自身は書いていない)
+
+#### TS のエラーコードと、oxc での実装状況 (実データで確認)
+
+`ts_error(code, message)` ヘルパーが **oxc_parser と oxc_semantic の両方** にあり
+(`OxcDiagnostic::error(msg).with_error_code("TS", code)`)、tsc と同じ番号を出す。
+規模はパーサー側が約107個、semantic 側が15個。
+
+番号帯の **目安**: 1xxx = 構文・文法 / 2xxx = 意味・型。
+`infer` の位置が **TS1338** (1xxx) なのは、tsc 自身が文法エラーに分類している証拠で、
+報告場所が checker なのは AST を歩く工程がそこにあるだけ。型は使っていないので
+**型を持たない oxc にも移植できた**。1.1 の Playground スクショも同じ対比:
+`'?' expected. (1005)` = 文法 → oxc もパーサーで同判定 /
+`Cannot find name 'extends'. (2304)` = 型・名前解決 → oxc は触らない。
+
+**ただし「1xxx=パーサー、2xxx=チェッカー」は法則ではない** (パーサー側の実在コードを集計):
+
+| 帯 | 件数感 | 中身の例 |
+|---|---|---|
+| 1xxx | 60件超 | 純粋な構文エラー |
+| 2xxx | 9件 | `2681` コンストラクタに `this` パラメータ不可 / `2730` アロー関数に `this` 不可 / `2452` enum メンバーに数値名不可 / `2206` import type の重複指定 |
+| 5xxx | 3件 | `5085` タプル要素が optional と rest を兼ねられない |
+| 8xxx | 6件 | `8002` `import ... =` は TS ファイルのみ / `8011` 型引数は TS ファイルのみ (= **.js に TS 構文を書いた** 系) |
+| 17000 / 18xxx | 数件 | JSX / `18010` private 識別子にアクセス修飾子不可 |
+
+semantic 側には逆に `1234` (ambient module 宣言はトップレベルのみ) という 1xxx がいる。
+
+パーサーが持つ 2xxx は **全部ローカルに判定できるもの**。`2681` は 1.2 で読んだ
+`new (this: number) => any` のチェックそのもので、同じ関数内だけ見れば分かる。
+TS が 2xxx を振ったのは「tsc がチェッカーのフェーズで報告している」という実装都合であって、
+判定に型が要るからではない。
+
+**正しい言い方**:
+- 本質は **判定に必要な情報の範囲** (ローカル / 木全体 / 型)
+- TS のコード番号は tsc がどのフェーズで報告するかの反映。相関はあるが一致しない
+- oxc は「型が要らないものは全部自前で出す」方針なので、パーサーの番号帯がばらける
+
 ### Identifier と IdentifierName — 予約語なのに `extends: number` が書ける理由
 
 JS の文法には「名前」が2種類ある:
@@ -357,10 +548,57 @@ demo1 (`T extends U extends V ? X : Y`) を両方に食わせた結果:
 - LT の筋: 「パーサーの互換性とは何か」— 文法判定は 1:1 でも、
   エラー回復戦略は消費者 (IDE vs ビルドツール) が決める、という対比が1枚で描ける
 
+### LT 有力候補: 「コメントアウトされた他人のコード」= 移植とは何を捨てるかの選択
+
+1.3 の `parseFunctionOrConstructorTypeToError` の話 (詳細は 1.3 のセクション参照)。
+上の「違うエラー回復」をもう一段具体にした版で、**捨てた瞬間が1行のコメントとして
+コードに残っている** のが強い。
+
+- **掴み**: 他人 (tsc) のソースが JS のままコメントで残っているスクショ1枚。
+  「これ何だと思います?」で始められる
+- **中身**: 移植とはコピーではない。oxc は文法の決断を 1:1 でコピーする一方 (権利がない)、
+  エラー回復は自由に捨てている。境界線は **互換性テストで測られるか否か**
+- **オチ**: 捨てた理由は3つとも「測られない・正常系にコストが乗る・後続処理がない」で、
+  技術的判断として筋が通っている。コメントは「知らずに漏らした」ではなく
+  「意図的に省いた」という意思表示
+- **絵になる素材**: コメント行 / oxc の `Unexpected token` / tsc Playground の名指しエラー、
+  の3枚並べ
+
+### LT 候補: 「そのエラー、誰が出してるの?」— 検査の住み分け
+
+`keyof infer U` が oxc のパーサーを素通りする話 (1.3 のセクション参照) を軸に、
+**1つの言語の検査が3つの実装に分かれている** ことを見せる筋。
+
+- **掴み**: `type C<T> = keyof infer U;` を oxc に食わせると通る。tsc では TS1338 が出る。
+  「oxc のバグ?」と振っておいて、違うと明かす
+- **中身**: 判定に必要な情報の範囲で担当が決まる —
+  ローカル (パーサー) / 木全体 (oxc_semantic、祖先を遡る実際のコードが10行で読める) /
+  型 (tsgolint 経由で Go 製の tsgo に外注)
+- **小ネタ**: TS のエラーコードの番号帯 (1xxx 文法 / 2xxx 意味) が目安になる。
+  ただし法則ではなく、パーサーにも 2xxx が9件いる (全部ローカル判定可能なもの) — の落差も面白い
+- **オチ**: 「Rust で全部書き直す」のではなく **型が要る仕事だけ本家に外注** している。
+  パーサーは全ファイルが必ず通るので 1:1 移植する価値があるが、型チェッカーは割に合わない
+
+#### LT 候補の整理 (Session 0-1 時点)
+
+| 候補 | 掴み | 難度 | 備考 |
+|---|---|---|---|
+| A. `f<T>(x)` vs `a<b>c` の曖昧性 | 誰でも読めるコード | 中 (動きの説明が要る) | 説明型。5分だと駆け足 |
+| B. コードよりコメントが長いファイル | 53行中40行の絵面 | 低 | 主張型。息切れしにくい |
+| C. コメントアウトされた他人のコード | JS のままのコメント | 低 | **B の具体版。1行+診断2枚で完結** |
+| D. tsc と oxc のエラー回復の違い | Playground との対比 | 中 | C に内包できる |
+| E. そのエラー、誰が出してるの? | 「通っちゃった」の意外性 | 低〜中 | パーサー読書の外の話も入れられる。3層の絵が描きやすい |
+
+B と C は同じ「コメントから設計を読む」筋なので、どちらか1本に統合するのが自然。
+C を軸に B の補強 (typescript.rs の 53行中40行) を入れるのが今のところ最有力。
+E は毛色が違い (コードの細部でなくエコシステムの構造)、聴衆が TS ユーザー中心なら
+こちらの方が刺さるかもしれない。
+
 ## 進捗
 
 - [x] Session 0: checkpoint / rewind / re-lex
-- [ ] Session 1: 型式コア (parse_ts_type 15-44 読了、次は union 245 から)
+- [ ] Session 1: 型式コア (1.1 parse_ts_type / 1.2 関数型 / 1.3 前半 union・intersection 読了。
+      次は `parse_type_operator_or_higher` 282 から)
 - [ ] Session 2: 型の難所
 - [ ] Session 3: signature member / try_parse_type_arguments
 - [ ] Session 4: ts/statement.rs + modifiers.rs

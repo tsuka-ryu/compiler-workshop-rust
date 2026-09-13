@@ -1,0 +1,1 @@
+type B = string | (() => void);
