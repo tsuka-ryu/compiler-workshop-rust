@@ -92,16 +92,15 @@ parse_ts_type                          types.rs:15   … conditional は最上�
       conditional の `extends` の衝突回避 (~350)。**1.3 で完了扱い**
       (`parse_constraint_of_infer_type` の4分岐を demos/oxc-step1 の demo12-15 で全網羅済み)
 
-## Session 3 (縮小・任意): signature member と型引数
+## Session 3 (3.3 のみ完了・残りスキップ): signature member と型引数
 
-> 2026-09-20 判断: 3.1 はスキップ、3.2 は任意の流し読み (15分ほど)。理由は下記「スキップした理由」参照。
+> 2026-09-20 判断: 3.1・3.2 ともスキップ。理由は下記「スキップした理由」参照。
 
 - ~~3.1 `parse_signature_member` (~1380) — interface body と `{ ... }` 型リテラルの共有部品~~ — skip
   (プロパティ/メソッド/call/construct/getter を分岐するだけの部品で新規性が薄い)
-- [ ] 3.2 (任意) `ts/statement.rs` `is_unambiguously_index_signature` —
-      `[x: string]` (index signature) vs `[x]` (computed property) の判別。
-      2.1 (`{ [K in` と `{ [key:`)・2.2 (`[a: T]` と `[a]`) と同じ「`[` の後を先読みで見分ける」形。
-      読むなら `is_unambiguously_index_signature` だけ
+- ~~3.2 `ts/statement.rs` `is_unambiguously_index_signature` — `[x: string]` (index signature) vs
+  `[x]` (computed property) の判別~~ — skip
+  (2.1 の `{ [K in` と `{ [key:`、2.2 の `[a: T]` と `[a]` と同じ「`[` の後を先読みで見分ける」形)
 - [x] 3.3 `try_parse_type_arguments` (861) / `parse_type_arguments_in_expression` (914) —
       **`f<T>(x)` vs `f < T > (x)` 問題の本丸**。Session 0-1 で先取り回収済み:
       re-lex の使用箇所 / `<=` を事前に弾く理由 / `can_follow_type_arguments_in_expr` の
@@ -145,7 +144,7 @@ parse_ts_type                          types.rs:15   … conditional は最上�
 - ~~6.2 `js/class.rs` — parameter properties / abstract / accessor~~
 - ~~6.3 `js/module.rs` — `import type` / `export type` / `import x = require(...)`~~
 
-## Session 3 (一部)・4・6 をスキップした理由
+## Session 3・4・6 をスキップした理由
 
 今回の主目的は「式と型で文法が別」を体で覚えること (下記「読み方のコツ」参照)。
 Session 4 の 4.2-4.4 は **新しい仕組みがない** — `declare` の識別子/modifier判定や
@@ -176,7 +175,7 @@ Session 3 の 3.1 (`parse_signature_member`) は分岐するだけの部品、3.
 - [x] Session 0: checkpoint / rewind / re-lex (完了)
 - [x] Session 1: 型式コア (1.1-1.4 完了)
 - [ ] Session 2: mapped / tuple / template / predicate / infer (2.1 mapped・2.2 tuple・2.5 infer(1.3 で完了扱い) 済み / 残り 2.3 template・2.4 predicate)
-- [ ] Session 3 (縮小): 3.1 はスキップ / 3.2 は任意の流し読み (3.3 は先取り済み)
+- [x] Session 3: 3.3 は先取りで完了 / 3.1・3.2 はスキップ (2026-09-20 判断)
 - [ ] Session 4 (縮小): 4.1 だけ流し読み。4.2-4.4 はスキップ
 - [ ] Session 5: as / satisfies / `!` / instantiation / arrow 曖昧性
 - [x] Session 6: 丸ごとスキップ (2026-09-20 判断)
