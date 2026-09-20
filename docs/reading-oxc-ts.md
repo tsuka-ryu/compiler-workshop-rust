@@ -64,12 +64,6 @@ parse_ts_type                          types.rs:15   … conditional は最上�
       **型パーサー全体地図** (降下ルート + `parse_ts_type` への再入ポイント表) をメモに作成。
       `parse_keyword_type` / `parse_type_reference` は配管のみなので読み飛ばし。メモ・demos 参照
 
-> 🔖 **次回の再開地点 (2026-09-20 時点)**
->
-> Session 1 (型式コア) は完了、Session 2 は 2.1 (mapped type) まで完了。次は **2.2**
-> `parse_tuple_type` (~978) / `parse_tuple_element` (~1044) — named tuple member の曖昧性と
-> `is_next_token_colon_or_question_colon` の先読みから。全体地図はメモの「型パーサー全体地図」を参照。
-
 **回収済みの問い**: conditional が union より上の理由 → `(A|B) extends C ? X : Y`。メモ参照。
 **式パーサーとの対比が一番の学び**: 型は演算子が少ないので階層を関数で固定した素朴な再帰下降。
 自作 Pratt と読み比べる。
