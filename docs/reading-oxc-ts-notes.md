@@ -912,12 +912,106 @@ parse_ts_type (15)
 やり直す**」の繰り返し。だから全経路は結局 `parse_ts_type` (15) と `parse_non_array_type` (411)
 の2つを通る、というロードマップの「読み方のコツ」の一文が実データで裏付けられた。
 
+### 2.1 読み始め: `is_start_of_mapped_type` (types.rs:606) — 区別が最後の1トークンで決まる
+
+`parse_non_array_type` の `Kind::LCurly` の腕は `self.lookahead(Self::is_start_of_mapped_type)` で
+mapped type (`{ [K in T]: U }`) か普通のオブジェクト型リテラルかを決めてから
+`parse_mapped_type` / `parse_type_literal` に分岐する。`lookahead` 内なので `bump` した分は判定後に全部巻き戻る。
+
+```rust
+fn is_start_of_mapped_type(&mut self) -> bool {
+    self.bump_any();                          // `{`
+    let kind = self.cur_kind();
+    if kind == Kind::Plus || kind == Kind::Minus {
+        self.bump_any();
+        return self.at(Kind::Readonly);       // `{ +readonly` / `{ -readonly` → 即 mapped 確定
+    }
+    self.bump(Kind::Readonly);                // `readonly` があれば食べる (無くてもよい)
+    if !self.eat(Kind::LBrack) && self.cur_kind().is_identifier_name() {
+        return false;                         // `[` が無く識別子 → `{ a: string }` のプロパティ
+    }
+    self.bump_any();                          // `[` の次 (キー名 K)
+    self.at(Kind::In)                         // 次が `in` なら mapped
+}
+```
+
+**`{ [K in` と `{ [key:` は `[識別子` までまったく同じ形で、4トークン目で初めて分かれる**:
+
+| 入力 | 判定 | 決め手 |
+|---|---|---|
+| `{ [K in T]: U }` | mapped | `[` `K` の次が `in` |
+| `{ [key: string]: T }` | 普通 (index signature) | 次が `:` |
+| `{ readonly [K in T]: U }` | mapped | `readonly` を読み飛ばした後は同じ |
+| `{ -readonly [K in T]: U }` | mapped | `+`/`-` の後に `readonly` があれば即確定 |
+| `{ a: string }` | 普通 | `[` が無く識別子 |
+
+これまでの `is_start_of_*` 系で一番深い先読み (`{` `[` 識別子 `in` の4トークン、`readonly` があれば+1)。
+「先頭の `{` だけでは決まらないが、固定長の先読みで必ず決まる」ので、投機 (checkpoint + 本パース + rewind)
+ではなく純粋な先読み判定で済んでいる。
+
+`+`/`-` の分岐で即 return できるのは、`{` の直後に `+`/`-` が来る正当な型が `+readonly`/`-readonly` の
+mapped type しかないから (プロパティ名は `+`/`-` で始まらない)。mapped type の modifier は
+`{ -readonly [K in T]-?: U }` のように `readonly` の前と `?` の前の2か所に付けられるが、この関数が見るのは
+前者 (`{` の直後) だけで、後者の `-?` は本体 `parse_mapped_type` が読む。
+
+### 2.1 `parse_mapped_type` (types.rs:640-697) — 読む順 = 文法規則、tsc との対応
+
+`{ readonly? [K in T as N]? : V ; }` を上から順に読むだけの素直な関数 (投機なし。判定は呼び出し前の
+`is_start_of_mapped_type` で済んでいる)。
+
+```rust
+self.expect(Kind::LCurly);
+// readonly / +readonly / -readonly  → Option<TSMappedTypeModifierOperator>
+self.expect(Kind::LBrack);
+if !self.cur_kind().is_identifier_name() { return self.unexpected(); }   // キー名になれるトークンか
+let key = self.parse_binding_identifier();      // K は「宣言する側」の名前 (BindingIdentifier)
+self.expect(Kind::In);
+let constraint = self.parse_ts_type();          // 回す対象のキー (keyof T など)
+let name_type = if self.eat(Kind::As) { Some(self.parse_ts_type()) } else { None };  // as 句
+self.expect(Kind::RBrack);
+// ? / +? / -?  → Option<TSMappedTypeModifierOperator>
+let type_annotation = self.eat(Kind::Colon).then(|| self.parse_ts_type());  // 値の型
+self.bump(Kind::Semicolon);
+self.expect(Kind::RCurly);
+```
+
+**型が3つ出てくる**: `constraint` (回す対象のキー) / `name_type` (`as` 句 = **キーの新しい名前を決める型**。
+値の型ではなくキー側を書き換える) / `type_annotation` (`:` の後の値の型)。
+
+**`TSMappedTypeModifierOperator` (True / Plus / Minus)**: `readonly` と `?` の修飾子が3通りの書き方
+(`readonly` / `+readonly` / `-readonly`、`?` / `+?` / `-?`) を取れるので3値 enum。`True` は「符号なしで素直に
+付いている」、無指定は `None`。`True` と `Plus` は意味が同じだがソース上で `+` を書いたかを区別するため別値。
+ESTree では `True` → `true`、`Plus`/`Minus` → `"+"`/`"-"` (typescript-estree に合わせた形。`null` のときと同じ
+「ESTree 互換のための形」の例)。
+
+**`K` を `BindingIdentifier` で読む理由**: `[K in T]` の `K` は「mapped type の中だけで有効な型パラメータを
+宣言する」名前だから。`BindingIdentifier` は semantic 解析で `symbol_id` が付く「宣言側」のノード
+(使う側は `IdentifierReference`、`a.if` のような予約語も許す名前は `IdentifierName`)。`TSMappedType` に
+`scope_id` があるのも同じ理由。キー位置の `is_identifier_name` チェックは緩い事前ゲート
+(識別子とキーワード全般を通す)、その後の `parse_binding_identifier` が予約語を専用エラーで弾く。
+事前チェックがなくても結果は変わらないはずだが、なぜ置いてあるかは未確認。
+
+#### tsc (6.0.3 `parser.ts:4410` `parseMappedType`) との対応
+
+| tsc `MappedTypeNode` | oxc `TSMappedType` |
+|---|---|
+| `typeParameter` (名前 + `in` + 制約を `TypeParameterDeclaration` 1個にまとめる) | `key` + `constraint` (別フィールド) |
+| `nameType` | `name_type` |
+| `type` | `type_annotation` |
+| `readonlyToken` (`readonly`/`+`/`-` のトークンノード) | `readonly` (3値 enum) |
+| `questionToken` (`?`/`+`/`-` のトークンノード) | `optional` (3値 enum) |
+| `members` (「文法エラーを出すためだけ」のコメント付き) | 対応する処理が見当たらない |
+
+`as` 句 (`parseOptional(AsKeyword) ? parseType() : undefined`) は oxc と 1:1 対応。キー名の読みは
+tsc が `parseIdentifierName()` (予約語も許す緩い読み) のまま通すのに対し、oxc は
+`is_identifier_name` → `parse_binding_identifier` の2段で、予約語だけ後段で弾く点が少し違う。
+
 ## 進捗
 
 - [x] Session 0: checkpoint / rewind / re-lex
 - [x] Session 1: 型式コア (1.1 parse_ts_type / 1.2 関数型 / 1.3 union・intersection・前置演算子・infer /
       1.4 postfix・non_array_type 完了。次は Session 2)
-- [ ] Session 2: 型の難所
+- [ ] Session 2: 型の難所 (2.1 mapped type 完了。次は 2.2 `parse_tuple_type`)
 - [ ] Session 3: signature member / try_parse_type_arguments
 - [ ] Session 4: ts/statement.rs + modifiers.rs
 - [ ] Session 5: JS 式への食い込み

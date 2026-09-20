@@ -66,9 +66,9 @@ parse_ts_type                          types.rs:15   … conditional は最上�
 
 > 🔖 **次回の再開地点 (2026-09-20 時点)**
 >
-> Session 1 (型式コア) は 1.4 まで完了。次は **Session 2** (mapped / tuple / template /
-> predicate / infer) から。全体地図はメモの「型パーサー全体地図」を参照。
-> (1.3 の `parse_constraint_of_infer_type` は demo13-15 で4分岐を全網羅済み)
+> Session 1 (型式コア) は完了、Session 2 は 2.1 (mapped type) まで完了。次は **2.2**
+> `parse_tuple_type` (~978) / `parse_tuple_element` (~1044) — named tuple member の曖昧性と
+> `is_next_token_colon_or_question_colon` の先読みから。全体地図はメモの「型パーサー全体地図」を参照。
 
 **回収済みの問い**: conditional が union より上の理由 → `(A|B) extends C ? X : Y`。メモ参照。
 **式パーサーとの対比が一番の学び**: 型は演算子が少ないので階層を関数で固定した素朴な再帰下降。
@@ -78,7 +78,11 @@ parse_ts_type                          types.rs:15   … conditional は最上�
 
 行番号はガイド作成時のもの (数行ズレあり、関数名で grep)。
 
-- [ ] 2.1 `parse_mapped_type` (~655) — `{ [K in keyof T]?: U }`。`+readonly` / `-?` の modifier 処理
+- [x] 2.1 `parse_mapped_type` (~655) — `{ [K in keyof T]?: U }`。`+readonly` / `-?` の modifier 処理。
+      呼び出し前の `is_start_of_mapped_type` (606) が難所: `{ [K in` と `{ [key:` は4トークン目で
+      分かれる固定長の先読み。本体は文法を上から読むだけの素直な関数。`as` 句 (`name_type` =
+      キー側を書き換える型)、`True/Plus/Minus` の3値 enum、`K` を `BindingIdentifier` で読む理由、
+      tsc 6.0.3 `parseMappedType` との対応表。メモ参照
 - [ ] 2.2 `parse_tuple_type` (~978) / `parse_tuple_element` (~1044) —
       named tuple member の曖昧性。`is_next_token_colon_or_question_colon` (~1097) の lookahead
 - [ ] 2.3 `parse_template_type` (~777) — テンプレートリテラル型。レキサーとの連携
@@ -166,7 +170,7 @@ Session 3 の残り (3.1/3.2) も型文法の続きなので優先。
 
 - [x] Session 0: checkpoint / rewind / re-lex (完了)
 - [x] Session 1: 型式コア (1.1-1.4 完了)
-- [ ] Session 2: mapped / tuple / template / predicate / infer
+- [ ] Session 2: mapped / tuple / template / predicate / infer (2.1 mapped 完了 / 残り 2.2-2.5)
 - [ ] Session 3: signature member (3.3 は先取り済み / 残り 3.1-3.2)
 - [ ] Session 4 (縮小): 4.1 だけ流し読み。4.2-4.4 はスキップ
 - [ ] Session 5: as / satisfies / `!` / instantiation / arrow 曖昧性
