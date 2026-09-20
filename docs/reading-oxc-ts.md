@@ -29,7 +29,7 @@ TS 文法は LL(1) では決まらない箇所だらけ。oxc の答えは **che
 
 **回収済みの問い**: checkpoint は何をコピーしていて、何をコピーしていないか → メモ参照
 
-## Session 1: 型式の再帰下降コア — `ts/types.rs` 前半 (~3h)
+## Session 1: 型式の再帰下降コア — `ts/types.rs` 前半 (~3h) ✅ 完了
 
 エントリは `types.rs:15` `parse_ts_type`。降下の階層が固定で並んでいる:
 
