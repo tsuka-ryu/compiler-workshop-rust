@@ -77,8 +77,13 @@ parse_ts_type                          types.rs:15   … conditional は最上�
       分かれる固定長の先読み。本体は文法を上から読むだけの素直な関数。`as` 句 (`name_type` =
       キー側を書き換える型)、`True/Plus/Minus` の3値 enum、`K` を `BindingIdentifier` で読む理由、
       tsc 6.0.3 `parseMappedType` との対応表。メモ参照
-- [ ] 2.2 `parse_tuple_type` (~978) / `parse_tuple_element` (~1044) —
-      named tuple member の曖昧性。`is_next_token_colon_or_question_colon` (~1097) の lookahead
+- [x] 2.2 `parse_tuple_type` (~978) / `parse_tuple_element` (~1044) —
+      named tuple member の曖昧性。`is_next_token_colon_or_question_colon` (~1097) の lookahead。
+      名前付きかどうかは「識別子 + 任意の `?` + `:`」の3トークン先読みで決まる (判定より後ろは
+      変な書き方を拾う後始末)。並び順の検査 (`seen_rest_span` / `seen_optional_span`、TS1265/1257/1266) は
+      tsc ではチェッカーが出していて oxc は構文の見た目で近似 → 見逃しは AST に影響しない。
+      `T?` (JSDocNullableType) をタプルの中だけ `TSOptionalType` に読み替える処理。
+      デモは demos/oxc-step2 (demo1-17)。メモ参照
 - [ ] 2.3 `parse_template_type` (~777) — テンプレートリテラル型。レキサーとの連携
 - [ ] 2.4 `parse_type_or_type_predicate` (~1341) + asserts (~815) —
       `x is string` / `asserts x is string`。戻り値型の位置だけで許される文法。
@@ -164,7 +169,7 @@ Session 3 の残り (3.1/3.2) も型文法の続きなので優先。
 
 - [x] Session 0: checkpoint / rewind / re-lex (完了)
 - [x] Session 1: 型式コア (1.1-1.4 完了)
-- [ ] Session 2: mapped / tuple / template / predicate / infer (2.1 mapped 完了 / 残り 2.2-2.5)
+- [ ] Session 2: mapped / tuple / template / predicate / infer (2.1 mapped・2.2 tuple 完了 / 残り 2.3-2.5)
 - [ ] Session 3: signature member (3.3 は先取り済み / 残り 3.1-3.2)
 - [ ] Session 4 (縮小): 4.1 だけ流し読み。4.2-4.4 はスキップ
 - [ ] Session 5: as / satisfies / `!` / instantiation / arrow 曖昧性

@@ -1,0 +1,105 @@
+TS-ESTree AST:
+{
+  "type": "Program",
+  "body": [
+    {
+      "type": "TSTypeAliasDeclaration",
+      "id": {
+        "type": "Identifier",
+        "decorators": [],
+        "name": "A",
+        "optional": false,
+        "typeAnnotation": null,
+        "start": 5,
+        "end": 6
+      },
+      "typeParameters": null,
+      "typeAnnotation": {
+        "type": "TSTupleType",
+        "elementTypes": [
+          {
+            "type": "TSRestType",
+            "typeAnnotation": {
+              "type": "TSTypeReference",
+              "typeName": {
+                "type": "Identifier",
+                "decorators": [],
+                "name": "Array",
+                "optional": false,
+                "typeAnnotation": null,
+                "start": 13,
+                "end": 18
+              },
+              "typeArguments": {
+                "type": "TSTypeParameterInstantiation",
+                "params": [
+                  {
+                    "type": "TSStringKeyword",
+                    "start": 19,
+                    "end": 25
+                  }
+                ],
+                "start": 18,
+                "end": 26
+              },
+              "start": 13,
+              "end": 26
+            },
+            "start": 10,
+            "end": 26
+          },
+          {
+            "type": "TSRestType",
+            "typeAnnotation": {
+              "type": "TSTypeReference",
+              "typeName": {
+                "type": "Identifier",
+                "decorators": [],
+                "name": "Array",
+                "optional": false,
+                "typeAnnotation": null,
+                "start": 31,
+                "end": 36
+              },
+              "typeArguments": {
+                "type": "TSTypeParameterInstantiation",
+                "params": [
+                  {
+                    "type": "TSNumberKeyword",
+                    "start": 37,
+                    "end": 43
+                  }
+                ],
+                "start": 36,
+                "end": 44
+              },
+              "start": 31,
+              "end": 44
+            },
+            "start": 28,
+            "end": 44
+          }
+        ],
+        "start": 9,
+        "end": 45
+      },
+      "declare": false,
+      "start": 0,
+      "end": 46
+    }
+  ],
+  "sourceType": "script",
+  "hashbang": null,
+  "start": 0,
+  "end": 47
+}
+
+  x TS(1265): A rest element cannot follow another rest element.
+   ,----
+ 1 | type A = [...Array<string>, ...Array<number>];
+   :           ^^^^^^^^|^^^^^^^  ^^^^^^^^|^^^^^^^
+   :                   |                 `-- Second rest element here
+   :                   `-- First seen here
+   `----
+
+Parsed with Errors.

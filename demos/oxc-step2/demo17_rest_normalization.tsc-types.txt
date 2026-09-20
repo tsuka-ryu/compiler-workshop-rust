@@ -1,0 +1,5 @@
+version 5.9.0-dev
+B = (string | number)[]
+C = [...string[], boolean, null]
+D = string[]
+diagnostics: none

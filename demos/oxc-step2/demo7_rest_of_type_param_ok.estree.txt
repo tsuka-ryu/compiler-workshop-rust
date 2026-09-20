@@ -1,0 +1,103 @@
+TS-ESTree AST:
+{
+  "type": "Program",
+  "body": [
+    {
+      "type": "TSTypeAliasDeclaration",
+      "id": {
+        "type": "Identifier",
+        "decorators": [],
+        "name": "A",
+        "optional": false,
+        "typeAnnotation": null,
+        "start": 5,
+        "end": 6
+      },
+      "typeParameters": {
+        "type": "TSTypeParameterDeclaration",
+        "params": [
+          {
+            "type": "TSTypeParameter",
+            "name": {
+              "type": "Identifier",
+              "decorators": [],
+              "name": "T",
+              "optional": false,
+              "typeAnnotation": null,
+              "start": 7,
+              "end": 8
+            },
+            "constraint": {
+              "type": "TSArrayType",
+              "elementType": {
+                "type": "TSUnknownKeyword",
+                "start": 17,
+                "end": 24
+              },
+              "start": 17,
+              "end": 26
+            },
+            "default": null,
+            "in": false,
+            "out": false,
+            "const": false,
+            "start": 7,
+            "end": 26
+          }
+        ],
+        "start": 6,
+        "end": 27
+      },
+      "typeAnnotation": {
+        "type": "TSTupleType",
+        "elementTypes": [
+          {
+            "type": "TSRestType",
+            "typeAnnotation": {
+              "type": "TSArrayType",
+              "elementType": {
+                "type": "TSStringKeyword",
+                "start": 34,
+                "end": 40
+              },
+              "start": 34,
+              "end": 42
+            },
+            "start": 31,
+            "end": 42
+          },
+          {
+            "type": "TSRestType",
+            "typeAnnotation": {
+              "type": "TSTypeReference",
+              "typeName": {
+                "type": "Identifier",
+                "decorators": [],
+                "name": "T",
+                "optional": false,
+                "typeAnnotation": null,
+                "start": 47,
+                "end": 48
+              },
+              "typeArguments": null,
+              "start": 47,
+              "end": 48
+            },
+            "start": 44,
+            "end": 48
+          }
+        ],
+        "start": 30,
+        "end": 49
+      },
+      "declare": false,
+      "start": 0,
+      "end": 50
+    }
+  ],
+  "sourceType": "script",
+  "hashbang": null,
+  "start": 0,
+  "end": 51
+}
+Parsed Successfully.

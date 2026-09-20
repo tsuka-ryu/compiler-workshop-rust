@@ -1,0 +1,103 @@
+TS-ESTree AST:
+{
+  "type": "Program",
+  "body": [
+    {
+      "type": "TSTypeAliasDeclaration",
+      "id": {
+        "type": "Identifier",
+        "decorators": [],
+        "name": "A",
+        "optional": false,
+        "typeAnnotation": null,
+        "start": 5,
+        "end": 6
+      },
+      "typeParameters": null,
+      "typeAnnotation": {
+        "type": "TSTupleType",
+        "elementTypes": [
+          {
+            "type": "TSRestType",
+            "typeAnnotation": {
+              "type": "TSNamedTupleMember",
+              "label": {
+                "type": "Identifier",
+                "decorators": [],
+                "name": "a",
+                "optional": false,
+                "typeAnnotation": null,
+                "start": 13,
+                "end": 14
+              },
+              "elementType": {
+                "type": "TSArrayType",
+                "elementType": {
+                  "type": "TSStringKeyword",
+                  "start": 16,
+                  "end": 22
+                },
+                "start": 16,
+                "end": 24
+              },
+              "optional": false,
+              "start": 13,
+              "end": 24
+            },
+            "start": 10,
+            "end": 24
+          },
+          {
+            "type": "TSRestType",
+            "typeAnnotation": {
+              "type": "TSNamedTupleMember",
+              "label": {
+                "type": "Identifier",
+                "decorators": [],
+                "name": "b",
+                "optional": false,
+                "typeAnnotation": null,
+                "start": 29,
+                "end": 30
+              },
+              "elementType": {
+                "type": "TSArrayType",
+                "elementType": {
+                  "type": "TSNumberKeyword",
+                  "start": 32,
+                  "end": 38
+                },
+                "start": 32,
+                "end": 40
+              },
+              "optional": false,
+              "start": 29,
+              "end": 40
+            },
+            "start": 26,
+            "end": 40
+          }
+        ],
+        "start": 9,
+        "end": 41
+      },
+      "declare": false,
+      "start": 0,
+      "end": 42
+    }
+  ],
+  "sourceType": "script",
+  "hashbang": null,
+  "start": 0,
+  "end": 43
+}
+
+  x TS(1265): A rest element cannot follow another rest element.
+   ,----
+ 1 | type A = [...a: string[], ...b: number[]];
+   :           ^^^^^^^|^^^^^^  ^^^^^^^|^^^^^^
+   :                  |               `-- Second rest element here
+   :                  `-- First seen here
+   `----
+
+Parsed with Errors.

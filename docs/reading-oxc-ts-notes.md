@@ -1006,12 +1006,215 @@ ESTree では `True` → `true`、`Plus`/`Minus` → `"+"`/`"-"` (typescript-est
 tsc が `parseIdentifierName()` (予約語も許す緩い読み) のまま通すのに対し、oxc は
 `is_identifier_name` → `parse_binding_identifier` の2段で、予約語だけ後段で弾く点が少し違う。
 
+### 2.2 読み始め: `parse_tuple_type` (types.rs:967) — 並び順の検査と、パーサー/チェッカー境界の訂正
+
+(`parse_tuple_element` = 要素1つの読み方は未読。ここは `parse_tuple_type` 本体の検査ロジックだけ。)
+
+`parse_delimited_list` に渡すクロージャの中で、要素を1つ読むたびに次の2つの状態を更新する:
+
+```rust
+let mut seen_rest_span: Option<Span> = None;      // これまでに見た rest 要素 (`...T[]`) の位置
+let mut seen_optional_span: Option<Span> = None;  // これまでに見た optional 要素 (`a?: T` / `T?`) の位置
+```
+
+`Option<Span>` なのは「まだ見ていない = `None`、見た = `Some(位置)`」で、位置は診断の
+「先に見た側」のラベル (`First seen here`) にそのまま使うため。3つのエラーを出す:
+
+| 入力 | エラー | 使う状態 |
+|---|---|---|
+| `[...string[], ...number[]]` | TS1265 rest の後に rest はだめ | `seen_rest_span` |
+| `[a?: string, b: number]` / `[string?, number]` | TS1257 optional の後に必須はだめ | `seen_optional_span` |
+| `[...string[], a?: number]` | TS1266 rest の後に optional はだめ | `seen_rest_span` |
+
+エラーにならない: `[...string[], number]` (rest の後の必須は許される。tsc 5.9 で確認)、
+`[a?: string, ...boolean[]]` (rest は「必須ではない要素」扱い)、`[...string[], ...T]` (`T` は型パラメータ)。
+実証は `demos/oxc-step2/` (demo1-13 + `tsc_check.js`)。
+
+**`me.error(...)` がやること**: 診断を1件ためるだけ ([error_handler.rs:59](../../../oxc-project/oxc/crates/oxc_parser/src/error_handler.rs#L59)
+`self.errors.push(error)`)。**致命的ではない**ので、パースは止まらず AST も最後まで作られる
+(`unexpected()` / `fatal_error` とは別物)。エラーは最後にまとめて報告される。
+
+3つの診断は、どれも「今の要素」と「先に見た要素」の2か所にラベルを付けて作る
+([diagnostics.rs:425-445](../../../oxc-project/oxc/crates/oxc_parser/src/diagnostics.rs#L425)):
+
+| 関数 | TS | ラベル1 (今の要素) | ラベル2 (先に見た要素) |
+|---|---|---|---|
+| `required_element_cannot_follow_optional_element` | 1257 | Required element here | Optional element seen here |
+| `rest_element_cannot_follow_another_rest_element` | 1265 | Second rest element here | First seen here |
+| `optional_element_cannot_follow_rest_element` | 1266 | Optional element here | Rest element seen here |
+
+渡す2つの `Span` が `tuple.span()` (今の要素) と `seen_*_span` (先に見た要素)。`seen_*_span` を
+`Option<Span>` で持つのは、この「先に見た側」のラベルに使うため。
+
+#### `parse_tuple_element` (types.rs:1044) — 名前付きの判別と、JSDocNullableType の読み直し
+
+**名前付き (`[a: string]`) か普通の型 (`[a]`) かの判別**は、`lookahead` で「識別子 + 任意の `?` + `:`」
+の3トークンを見るだけ (`is_next_token_colon_or_question_colon`、[types.rs:1080](../../../oxc-project/oxc/crates/oxc_parser/src/ts/types.rs#L1080) あたり):
+
+```rust
+fn is_next_token_colon_or_question_colon(&mut self) -> bool {
+    self.bump_any();            // 識別子
+    self.bump(Kind::Question);  // `?` があれば
+    self.at(Kind::Colon)        // 次が `:` か
+}
+```
+
+| 入力 | 判定 |
+|---|---|
+| `[a: string]` / `[a?: string]` | 名前付き |
+| `[a]` / `[a?]` | 普通の型 (`a` / `a?`) |
+
+`is_start_of_mapped_type` (4トークン) より短い固定長の先読み。判定より後ろの処理 (`...` や `?` の
+位置違いを受け付けてエラーだけ出す) は変な書き方を拾うための後始末で、パースの本筋ではない。
+
+**`JSDocNullableType` の読み直し (`convert_type_to_tuple_element`、:1083)**: `[string?]` の `string?` は、
+まず `parse_postfix_type_or_higher` の `?` の分岐 (次が `]` で型の開始ではない) で
+`JSDocNullableType` (postfix) として作られる。そのままだと「JSDoc の nullable」だが、タプルの中では
+意味が「optional な要素」なので、タプルの文脈だけ `TSOptionalType` に読み替える:
+
+```
+string?  →  JSDocNullableType(postfix)  →  TSOptionalType   (タプルの中だけ)
+```
+
+```rust
+fn convert_type_to_tuple_element(&self, ty: TSType<'a>) -> TSTupleElement<'a> {
+    if let TSType::JSDocNullableType(ty) = ty {
+        if ty.postfix { TSTupleElement::new_ts_optional_type(ty.span, ty.unbox().type_annotation, self) }
+        else          { TSTupleElement::JSDocNullableType(ty) }      // 前置 `?T` はそのまま
+    } else { TSTupleElement::from(ty) }
+}
+```
+
+1.4 で見た「`?` の次が型の開始でなければ postfix nullable」という判定が、タプルの中では
+optional 要素を作るための下ごしらえとして使われている、という接続。JSDoc 型が TS の型パーサーに
+同居している (1.4) ことの、実際の使われ方の例でもある。
+
+#### 訂正: この検査は tsc ではチェッカーが出している (oxc は構文で近似)
+
+最初「同じタプル内の前の要素だけ見れば決まるのでパーサーが出す (1.3 のローカル/木全体の境界線どおり)」
+と説明したが、**tsc の実物 (`checker.ts` `checkTupleType`) を読むと3つとも型の解決が要るチェッカーの検査**だった。
+
+- tsc: `...` の後ろを `getTypeFromTypeNode` で解決し、`isArrayType(type)` (か rest を含むタプル) のときだけ
+  `Variadic` を `Rest` に昇格させて数える。型パラメータ `T` は昇格しない (何に展開されるか未定なので)
+- oxc: 解決はできないので、`...` の後ろが「`X[]` という構文」か「名前が `Array` の型参照」かという
+  **書かれた見た目**で判定する近似
+
+前に `...string[]` がある状態で `...` の後ろの書き方を変えて比べた結果 (実測):
+
+| `...` の後ろ | oxc | tsc 5.9 |
+|---|---|---|
+| `number[]` / `Array<number>` | エラー | エラー |
+| `readonly number[]` / `ReadonlyArray<number>` | OK (見逃す) | エラー |
+| `S` (`type S = string[]` のエイリアス) | OK (見逃す) | エラー |
+| `T` (型パラメータ) / `[number, string]` (タプル) | OK | OK |
+
+`T` とタプルが通るのは両者で一致する。見逃すのは「見た目が配列らしくないだけで中身は配列」なもの
+(`readonly` 付き・`ReadonlyArray`・エイリアス)。
+
+1.3 の境界線は「ローカルに閉じる検査はパーサー」と書いたが、正確には**「判定に型の解決が要るかどうか」**が
+軸で、タプル内の前の要素だけで決まるように**見える**検査でも、解決が要るなら本来はチェッカーの仕事。
+oxc はそれを構文の範囲で近似してパーサーで出している (近似にした理由は確認していない)。
+
+#### なぜ rest は1個までなのか — 区切りが決まらないから
+
+意味的な理由は「**最初の rest と次の rest の境界が型から決まらない**」こと。tsc は
+`createNormalizedTupleType` (`checker.ts:17267`) のコメントにある通り、タプル型を次の2つの形しか
+取れないように正規化して保持する:
+
+1. 必須要素 → optional 要素 → rest 0〜1個
+2. 必須要素 → rest 1個 → 必須要素
+
+`[...string[], ...number[]]` に `["a", "b", 1, 2]` を入れると、どこまでが `string[]` でどこからが
+`number[]` かが決まらない (`[...string[], ...string[]]` なら境界は完全に不定)。すると `t[3]` の型・
+`length`・代入できるかが定まらない。
+
+ただし **`...T` が展開されて rest が2個になる分は tsc が黙って union に畳んで受け入れる**
+(`createNormalizedTupleType` の「first rest と last optional/rest の間を1つの rest に畳む」処理)。
+tsc 5.9 で実測 (`demos/oxc-step2/demo17`、`tsc_type_of.js`):
+
+| 入力 (`A<T> = [...string[], ...T]`) | 解決後の型 |
+|---|---|
+| `A<number[]>` | `(string \| number)[]` |
+| `A<[boolean, null]>` | `[...string[], boolean, null]` |
+| `A<[]>` | `string[]` |
+
+書かれたコードで2個ある形は拒否し、展開後に2個になる形は畳んで受け入れる、という使い分け。
+これが「`...T` を最初のチェックで rest と数えない」理由 (前節の表の `T` が OK な理由) にもつながる。
+
+#### 見逃しは許容されているのか — 正しいコードは全部通す / 間違いを弾くのは未対応が残っている
+
+`readonly` / `ReadonlyArray` / エイリアスの見逃しは、**AST は普通に作られて診断が1件出ないだけ**で、
+パースには影響しない。oxc 全体の状況は、TypeScript 本家のテストを使った互換性集計
+(`parser_typescript.snap`。oxc は rev `1aa5ec11ce`。スナップショット先頭の `commit: b465fdbf` は
+test262 (`be13516f`) や babel (`1eac4481`) の snap と値が違うので、oxc ではなくテストスイート側の
+コミットと思われる。未確認) から読める:
+
+| 項目 | 結果 |
+|---|---|
+| 正しいコードが通るか (Positive Passed) | 9783 / 9783 (**100%**) |
+| エラーになるべきコードを弾けたか (Negative Passed) | 1649 / 2636 (**62.56%**) |
+| 見逃し (`Expect Syntax Error:` の行数) | **987 件** (= 2636 − 1649) |
+
+**「Negative Passed」の意味** (公式ドキュメントには記述なし。`website/src` の md/mdx と oxc の md を
+「Negative Passed」で grep して、ヒットは `tasks/coverage/src/lib.rs` (出力) と
+`tasks/coverage/src/typescript/constants.rs` の冒頭コメントだけ。README は実行方法のみ):
+
+- 集計の目的 (constants.rs のコメント): パーサーは「正しい構文をエラーなく通す」ことと「不正な構文を
+  検出する」こと、semantic は「対応しているチェックの検出」を測る
+- **分母 2636 は tsc が出すエラー全部ではない**。型推論が要るテストやコンパイラオプション依存のテストは
+  `NOT_SUPPORTED_TEST_PATHS` (ファイル単位) と `NOT_SUPPORTED_ERROR_CODES` (エラーコード単位) で
+  **意図的に除外**してある。除外しないと「Negative Passed の数字が低いままになり、対応できるものが
+  `Expect Syntax Error` の行に埋もれる」ため
+- 除外した後にエラーコードが残るテストは「oxc も何らかのエラーを報告する必要がある」もの (原文)。
+  つまり見逃し 987 件は「許容と決めたもの」ではなく、**意図的な対象外を除いた残り = 未対応のバックログ**
+
+以前ここに「許容できる」と書いたのは言い過ぎだった。正しくは、意図的に対象外にしたものは除外リストに
+入っていて、リストに入っていない見逃しは「まだ出来ていない」扱い。
+
+同じコメントに **「同じエラーコードでも tsc の別の部品から出る。パース時に検出できる場合も、型推論の結果で
+初めて分かる場合もある。oxc の対応が限定的だとコードだけでは除外できず、ファイル単位で除外する」** とある。
+今回の TS1265 (tsc ではチェッカー、oxc では構文で近似したパーサー) はまさにこの例。
+
+タプル関係では `restTupleElements1.ts` / `variadicTuples2.ts` (今回の3エラー) は弾けていて (1257/1265/1266 は
+`NOT_SUPPORTED_ERROR_CODES` に入っていない = 対応対象)、`unionsOfTupleTypes1.ts` /
+`contextualTypeTupleEnd.ts` は見逃しリストにある (後者2件の中身は未確認)。
+
+#### 出典 (2.2 の節で書いたことの根拠)
+
+oxc は rev `1aa5ec11ce`、リンクは `../../../oxc-project/oxc/` 配下。
+
+- 並び順検査の実装 (`seen_rest_span` / `seen_optional_span`、3つのエラー):
+  [types.rs:967-](../../../oxc-project/oxc/crates/oxc_parser/src/ts/types.rs#L967)、
+  診断の定義 [diagnostics.rs:431](../../../oxc-project/oxc/crates/oxc_parser/src/diagnostics.rs#L431)
+- tsc 側の同じ検査: `~/Documents/ecosystem/TypeScript/src/compiler/checker.ts:42029` `checkTupleType`
+  (そのクローンは HEAD `15392346d0` 2025-02-28、package.json 5.9.0。`ts.version` は `5.9.0-dev`)。
+  エラーの実測は `demos/oxc-step2/tsc_check.js` (同じ 5.9.0-dev)
+- rest が1個までの理由と畳み込み: `~/Documents/ecosystem/TypeScript/src/compiler/checker.ts:17267` `createNormalizedTupleType`
+  (同じ 5.9.0-dev)。実測は `demos/oxc-step2/demo17_rest_normalization.ts` + `tsc_type_of.js`
+- 適合率の数字: [parser_typescript.snap:6](../../../oxc-project/oxc/tasks/coverage/snapshots/parser_typescript.snap#L6)
+  (`Negative Passed: 1649/2636`)、`Expect Syntax Error:` 行の数 987 は `grep -c` で数えた
+- 「Negative Passed」の意味:
+  [constants.rs:15](../../../oxc-project/oxc/tasks/coverage/src/typescript/constants.rs#L15) (目的)、
+  [:24](../../../oxc-project/oxc/tasks/coverage/src/typescript/constants.rs#L24) (除外しないと数字が低いままになる理由)、
+  [:34](../../../oxc-project/oxc/tasks/coverage/src/typescript/constants.rs#L34) (除外後に残るコードは oxc も報告が必要)、
+  [:46](../../../oxc-project/oxc/tasks/coverage/src/typescript/constants.rs#L46) (同じコードが tsc の別の部品から出る話)、
+  除外リスト [:52](../../../oxc-project/oxc/tasks/coverage/src/typescript/constants.rs#L52) `NOT_SUPPORTED_TEST_PATHS`・
+  [:108](../../../oxc-project/oxc/tasks/coverage/src/typescript/constants.rs#L108) `NOT_SUPPORTED_ERROR_CODES`、
+  数字を出す側 [lib.rs:183](../../../oxc-project/oxc/tasks/coverage/src/lib.rs#L183)
+- タプルのテスト: [restTupleElements1.ts](../../../oxc-project/oxc/tasks/coverage/snapshots/parser_typescript.snap#L31019)・
+  [variadicTuples2.ts](../../../oxc-project/oxc/tasks/coverage/snapshots/parser_typescript.snap#L31029) の診断
+- 公式ドキュメントに記述が無いという確認: `oxc-project/website/src` の md/mdx と oxc 内の md/rs を
+  「Negative Passed」で grep。ヒットは lib.rs と constants.rs のコメントだけ (`tasks/coverage/README.md` は実行方法のみ)
+
+未確認: `readonly` / エイリアスの見逃しを oxc が把握しているか (テストに名指しの項目は無かった)。
+**推測**: oxc はフォーマッタ・リンタ・変換が主用途で、型の誤りは tsc を別に走らせて検出する前提。
+
 ## 進捗
 
 - [x] Session 0: checkpoint / rewind / re-lex
 - [x] Session 1: 型式コア (1.1 parse_ts_type / 1.2 関数型 / 1.3 union・intersection・前置演算子・infer /
       1.4 postfix・non_array_type 完了。次は Session 2)
-- [ ] Session 2: 型の難所 (2.1 mapped type 完了。次は 2.2 `parse_tuple_type`)
+- [ ] Session 2: 型の難所 (2.1 mapped type・2.2 tuple 完了。次は 2.3 `parse_template_type`)
 - [ ] Session 3: signature member / try_parse_type_arguments
 - [ ] Session 4: ts/statement.rs + modifiers.rs
 - [ ] Session 5: JS 式への食い込み

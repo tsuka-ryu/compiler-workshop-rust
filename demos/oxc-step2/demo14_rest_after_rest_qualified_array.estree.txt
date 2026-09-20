@@ -1,0 +1,179 @@
+TS-ESTree AST:
+{
+  "type": "Program",
+  "body": [
+    {
+      "type": "TSModuleDeclaration",
+      "id": {
+        "type": "Identifier",
+        "decorators": [],
+        "name": "ns",
+        "optional": false,
+        "typeAnnotation": null,
+        "start": 18,
+        "end": 20
+      },
+      "body": {
+        "type": "TSModuleBlock",
+        "body": [
+          {
+            "type": "TSTypeAliasDeclaration",
+            "id": {
+              "type": "Identifier",
+              "decorators": [],
+              "name": "Array",
+              "optional": false,
+              "typeAnnotation": null,
+              "start": 28,
+              "end": 33
+            },
+            "typeParameters": {
+              "type": "TSTypeParameterDeclaration",
+              "params": [
+                {
+                  "type": "TSTypeParameter",
+                  "name": {
+                    "type": "Identifier",
+                    "decorators": [],
+                    "name": "T",
+                    "optional": false,
+                    "typeAnnotation": null,
+                    "start": 34,
+                    "end": 35
+                  },
+                  "constraint": null,
+                  "default": null,
+                  "in": false,
+                  "out": false,
+                  "const": false,
+                  "start": 34,
+                  "end": 35
+                }
+              ],
+              "start": 33,
+              "end": 36
+            },
+            "typeAnnotation": {
+              "type": "TSArrayType",
+              "elementType": {
+                "type": "TSTypeReference",
+                "typeName": {
+                  "type": "Identifier",
+                  "decorators": [],
+                  "name": "T",
+                  "optional": false,
+                  "typeAnnotation": null,
+                  "start": 39,
+                  "end": 40
+                },
+                "typeArguments": null,
+                "start": 39,
+                "end": 40
+              },
+              "start": 39,
+              "end": 42
+            },
+            "declare": false,
+            "start": 23,
+            "end": 43
+          }
+        ],
+        "start": 21,
+        "end": 45
+      },
+      "kind": "namespace",
+      "declare": true,
+      "global": false,
+      "start": 0,
+      "end": 45
+    },
+    {
+      "type": "TSTypeAliasDeclaration",
+      "id": {
+        "type": "Identifier",
+        "decorators": [],
+        "name": "A",
+        "optional": false,
+        "typeAnnotation": null,
+        "start": 51,
+        "end": 52
+      },
+      "typeParameters": null,
+      "typeAnnotation": {
+        "type": "TSTupleType",
+        "elementTypes": [
+          {
+            "type": "TSRestType",
+            "typeAnnotation": {
+              "type": "TSArrayType",
+              "elementType": {
+                "type": "TSStringKeyword",
+                "start": 59,
+                "end": 65
+              },
+              "start": 59,
+              "end": 67
+            },
+            "start": 56,
+            "end": 67
+          },
+          {
+            "type": "TSRestType",
+            "typeAnnotation": {
+              "type": "TSTypeReference",
+              "typeName": {
+                "type": "TSQualifiedName",
+                "left": {
+                  "type": "Identifier",
+                  "decorators": [],
+                  "name": "ns",
+                  "optional": false,
+                  "typeAnnotation": null,
+                  "start": 72,
+                  "end": 74
+                },
+                "right": {
+                  "type": "Identifier",
+                  "decorators": [],
+                  "name": "Array",
+                  "optional": false,
+                  "typeAnnotation": null,
+                  "start": 75,
+                  "end": 80
+                },
+                "start": 72,
+                "end": 80
+              },
+              "typeArguments": {
+                "type": "TSTypeParameterInstantiation",
+                "params": [
+                  {
+                    "type": "TSNumberKeyword",
+                    "start": 81,
+                    "end": 87
+                  }
+                ],
+                "start": 80,
+                "end": 88
+              },
+              "start": 72,
+              "end": 88
+            },
+            "start": 69,
+            "end": 88
+          }
+        ],
+        "start": 55,
+        "end": 89
+      },
+      "declare": false,
+      "start": 46,
+      "end": 90
+    }
+  ],
+  "sourceType": "script",
+  "hashbang": null,
+  "start": 0,
+  "end": 91
+}
+Parsed Successfully.

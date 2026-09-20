@@ -1,0 +1,58 @@
+TS-ESTree AST:
+{
+  "type": "Program",
+  "body": [
+    {
+      "type": "TSTypeAliasDeclaration",
+      "id": {
+        "type": "Identifier",
+        "decorators": [],
+        "name": "A",
+        "optional": false,
+        "typeAnnotation": null,
+        "start": 5,
+        "end": 6
+      },
+      "typeParameters": null,
+      "typeAnnotation": {
+        "type": "TSTupleType",
+        "elementTypes": [
+          {
+            "type": "TSOptionalType",
+            "typeAnnotation": {
+              "type": "TSStringKeyword",
+              "start": 10,
+              "end": 16
+            },
+            "start": 10,
+            "end": 17
+          },
+          {
+            "type": "TSNumberKeyword",
+            "start": 19,
+            "end": 25
+          }
+        ],
+        "start": 9,
+        "end": 26
+      },
+      "declare": false,
+      "start": 0,
+      "end": 27
+    }
+  ],
+  "sourceType": "script",
+  "hashbang": null,
+  "start": 0,
+  "end": 28
+}
+
+  x TS(1257): A required element cannot follow an optional element.
+   ,----
+ 1 | type A = [string?, number];
+   :           ^^^|^^^  ^^^|^^
+   :              |        `-- Required element here
+   :              `-- Optional element seen here
+   `----
+
+Parsed with Errors.
