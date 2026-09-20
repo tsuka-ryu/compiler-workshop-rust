@@ -606,7 +606,7 @@ demo1 (`T extends U extends V ? X : Y`) を両方に食わせた結果:
 - **オチ**: 「Rust で全部書き直す」のではなく **型が要る仕事だけ本家に外注** している。
   パーサーは全ファイルが必ず通るので 1:1 移植する価値があるが、型チェッカーは割に合わない
 
-#### LT 候補の整理 (Session 0-1 時点)
+#### LT 候補の整理 (Session 2.2 時点で F-I を追加)
 
 | 候補 | 掴み | 難度 | 備考 |
 |---|---|---|---|
@@ -615,11 +615,128 @@ demo1 (`T extends U extends V ? X : Y`) を両方に食わせた結果:
 | C. コメントアウトされた他人のコード | JS のままのコメント | 低 | **B の具体版。1行+診断2枚で完結** |
 | D. tsc と oxc のエラー回復の違い | Playground との対比 | 中 | C に内包できる |
 | E. そのエラー、誰が出してるの? | 「通っちゃった」の意外性 | 低〜中 | パーサー読書の外の話も入れられる。3層の絵が描きやすい |
+| F. `null` の AST は誰に合わせるか | 同じ `null` 型が tsc / typescript-estree / oxc で形が違う | 低〜中 | **3者の関係が1つの型で見える**。tsc 4.0 の変更 → typescript-estree が剥がす → oxc が合わせる |
+| G. oxc は何を捨てて速いのか | `[...S, ...S]` を oxc は通し、tsc は TS1265 | 低 | **demo11 が1行で差を見せる**。適合率 100% / 62.56% の数字も添えられる |
+| H. キーワードが識別子になる | `namespace string {}` が書ける | 低 | JS 仕様 (IdentifierName) と TS のソフトキーワード。デモ未作成 |
+| I. 移植とは何を捨てるか (tsc 6.0 → ts-go 7.x) | `JSDocFunctionType` を Microsoft 自身も Go 移植で落とした | 低 | C の補強。oxc の未移植が「独自の手抜き」ではない裏付け |
 
 B と C は同じ「コメントから設計を読む」筋なので、どちらか1本に統合するのが自然。
 C を軸に B の補強 (typescript.rs の 53行中40行) を入れるのが今のところ最有力。
 E は毛色が違い (コードの細部でなくエコシステムの構造)、聴衆が TS ユーザー中心なら
 こちらの方が刺さるかもしれない。
+
+#### LT の軸候補 (Session 2.2 時点): 「パーサーの範囲? チェッカーの範囲? — tsc / typescript-estree / oxc」
+
+E・F・G をまとめると、**「同じ TypeScript を読む3者は、どこまでを・どの形で扱うか」** という1本の軸になる。
+ニッチさ対策として、最初に3者の関係を1枚で置く:
+
+```
+                 TypeScript のソース
+                        │
+     ┌──────────────────┼───────────────────────┐
+     ▼                  ▼                       ▼
+    tsc            typescript-estree            oxc
+ パーサー+チェッカー   tsc の AST を ESTree 形式に変換   自前パーサー (Rust)
+ (型の解決までやる)   (ESLint 向け)              AST は typescript-estree の形に合わせて出力
+```
+
+- **tsc**: 本家。パーサーの後ろにチェッカーがあり、型を解決して検査する
+- **typescript-estree**: ESLint が TS を読むための変換層。tsc の AST を ESTree 形式に直す
+  (`convert.js:2439` に `null` を剥がすコメントがある = F の根拠)
+- **oxc**: 高速な再実装。型は解決しない。AST の形は typescript-estree に合わせる
+
+この軸で話せること (実測済みのもの):
+
+| 観点 | 具体例 | 材料 |
+|---|---|---|
+| 検査を出す場所が違う | tuple の rest 検査 (TS1265): tsc は型を解決するチェッカー、oxc は構文の見た目で近似 | demos/oxc-step2 demo11-14、メモ 2.2 の節 |
+| 近似の代償 | `readonly` / `ReadonlyArray` / エイリアス / `ns.Array<X>` は見逃す。ただし AST には影響しない | demo11-14 |
+| oxc の優先順位 | 正しいコードは 100% 通す (Positive)、間違いを弾くのは 62.56% (Negative) | parser_typescript.snap (メモの出典) |
+| AST の形は誰に合わせるか | `null`: tsc 4.0 以降 `LiteralType > NullKeyword`、typescript-estree と oxc は `TSNullKeyword` | 実測 (メモの `null` の節) |
+| 検査の住み分けの軸 | 「ローカルに閉じるか」ではなく「**判定に型の解決 / 木全体が要るか**」 | メモ 1.3・2.2 (訂正済み) |
+
+**発表のゴール (2026-09-20 に決定)**: 聴いた人が、**自分と同じように oxc の TS パーサーを読むときの「当たり」がつく**
+こと。つまり「oxc の TS はすごい」ではなく「どこから読み始めて、何に出会うか」の地図と読み方。
+
+**発表の骨格案 (5分)**: 地図 → 入口 → 読み方のコツ → 出会う落とし穴 (demo) の順。
+
+| 時間 | 内容 | 材料 |
+|---|---|---|
+| 0:00-0:30 | 問い: 「oxc の TS パーサーを読もうとしたら、どこから手を付ける?」 | — |
+| 0:30-2:00 | **地図**: TS を読むときに通るファイル (下の図 1 枚) + **入口は 2 関数** (`parse_ts_type` / `parse_non_array_type`) | ファイル名 + 行数、全体地図 (メモの「型パーサー全体地図」) |
+| 2:00-3:30 | **読み方のコツ**: ①関数名 ↔ 出会う道具の見分け方 ②tsc を横に置く ③動かしながら読む | 下の「読み方のコツ」 |
+| 3:30-4:30 | **出会う落とし穴**: tsc と 1:1 だと思って読むと混乱する所 → demo11 の 1 行を tsc と oxc で走らせる | demo11-14、適合率 |
+| 4:30-5:00 | まとめ: 入口・地図・tsc 併読・動かす | — |
+
+**読み方のコツ** (実際に読んで効いたもの。聴衆が同じ順で読める形に):
+1. **コード中の目印で道具が分かる**: `is_start_of_*` = 1 トークン以上の先読み / `checkpoint` + `rewind` = 投機 /
+   `re_lex_*` = レキサーへの巻き戻し依頼 (曖昧性への 3 つの道具)。目印を見つけたら「ここは曖昧なんだな」と思って読む
+2. **tsc を横に置く**: 関数名がほぼ 1:1 (`parseNonArrayType` ↔ `parse_non_array_type`、`parseMappedType` ↔
+   `parse_mapped_type`)。oxc の未移植箇所は tsc の原文がコメントアウトで残っている。「なぜこの文法?」の答えは tsc 側
+3. **動かしながら読む**: `cargo run -p oxc_parser --example parser -- x.ts --estree` で AST を見る。
+   迷子になったら `parse_ts_type` と `parse_non_array_type` に戻る (型パーサーの全経路はこの 2 つを通る)
+4. **「エラーを出す場所」は tsc と違うことがある**: tsc ではチェッカーが出す検査を、oxc はパーサーで近似したり
+   出さなかったりする。これを知らずに読むと「tsc と挙動が違う」で混乱する → demo11 で見せる
+
+**LT とブログの分担 (2026-09-20)**: LT は上の「地図・入口・読み方のコツ・落とし穴 1 つ」だけ。
+細かい内容はブログに書く予定で、**形は「oxc の TS パーサーを読んで見つけたおもしろトリビア集」**
+(各項目が独立した小ネタで、どこからでも読める。このメモに書いてきた発見がそのままネタになる)。
+LT では触れずにブログ側へ回す。トリビアのタイトル案:
+
+| # | トリビアのタイトル案 | 一言 | 材料 (このメモ内) |
+|---|---|---|---|
+| 1 | `null` 型の AST は TS 4.0 で変わった | tsc が `LiteralType` で包み、typescript-estree が剥がし、oxc はそれに合わせた | 「`null` だけ `TSLiteralType` ではなく `TSNullKeyword`」の節 |
+| 2 | タプルの rest がなぜ 1 個までか | 境界が決まらないから。`...T` は展開後に union へ畳まれる (tsc 5.9 で実測) | 2.2 の節、demo17 |
+| 3 | oxc は `[...S, ...S]` を通す | tsc はエラー。チェッカーの検査を構文の見た目で近似している | 2.2 の節、demo11-14 |
+| 4 | oxc の適合率は「正しいコード 100% / 間違い 62.56%」 | 「Negative Passed」の意味と、除外リストの存在 | 「見逃しは許容されているのか」の節 |
+| 5 | `namespace string {}` が書ける | JS は `string` を予約語にしなかった。だから `.` を 1 トークン先読みする | `string`/`number` は予約語じゃない、の節 |
+| 6 | `infer T extends U ? A : B` は誰の `extends`? | 曖昧なときだけ checkpoint する 4 分岐 | 1.3 後半の節、demo12-15 |
+| 7 | 「立っている」フラグは動的スコープ | `DisallowConditionalTypes` を付け外しして再帰を制御する | 1.3 後半の節 (`context_add`) |
+| 8 | `<` は 2 回読まれる | レキサーへの re-lex 依頼。`lexer/typescript.rs` は 53 行中 40 行がコメント | Session 0 の節、demos/oxc-step0 |
+| 9 | `{ [K in` と `{ [key:` は 4 トークン目で分かれる | 固定長の先読み。`is_start_of_type` との 2 重管理も | 1.4・2.1 の節 |
+| 10 | 型の中に JSDoc が住んでいる | `T?` を JSDoc nullable と conditional の `?` で読み分ける。`*` は未移植 | 1.4 の JSDoc の節 |
+| 11 | Microsoft 自身も落とした機能 | `JSDocFunctionType` は tsc 6.0 にあり、ts-go 7.x で無い | 1.4 の JSDoc の節 (比較表) |
+| 12 | コメントアウトされた他人のコード | 移植とは何を捨てるかの選択 | 1.3 の LT 有力候補の節 |
+
+書き方の方針案: 1 項目 = 入力 1 行 + 結果 (tsc と oxc の出力) + 1〜2 段落。デモは `demos/` から
+そのまま引用できる。**未確認だった事項** (H の `namespace string {}` のデモなど) は、書く前にデモで確認する。
+
+**図: TS を読むときに通るファイル** (`oxc/crates/`、行数は rev `1aa5ec11ce`):
+
+```
+ oxc_parser/src/
+   lexer/typescript.rs        53行   ← `<` `>` の re-lex (`f<T>(x)` vs `a < b > c` のため)
+   cursor.rs                 638行   ← checkpoint / rewind / lookahead (投機の道具)
+   context.rs                190行   ← DisallowConditionalTypes などの文脈フラグ
+   js/statement.rs           932行   ← `is_ts && at_start_of_ts_declaration` で TS の文へ分岐 (:191, :910)
+   ts/statement.rs           962行   ← enum / interface / type alias / namespace / declare
+   ts/types.rs             1,690行   ← 型の再帰下降 (このメモの主戦場)
+   js/expression.rs        1,799行   ← `as` / `satisfies` / `!` / `<T>expr` が式パーサーに埋まっている
+   js/arrow.rs               410行   ← アロー関数の曖昧性 (TS 版)
+   diagnostics.rs          1,423行   ← TS のエラーコード (TS1265 など) の定義
+ oxc_ast/src/ast/ts.rs     1,876行   ← TS ノードの定義 (TSTupleType など)
+ oxc_semantic/src/checker/typescript.rs  343行  ← 木全体が要る検査 (infer の位置 TS1338 など)
+```
+
+**コツ 1 の実例 (読んでいて出会った曖昧性の道具。どれか 1〜2 個を「例」として使う。実測・デモ済み)**:
+- `<` の re-lex: レキサーとパーサーが双方向で協調して `f<T>(x)` と `a < b > c` を見分ける。53 行の
+  `lexer/typescript.rs` (Session 0 のメモと demos/oxc-step0)
+- 曖昧なときだけ投機する `parse_constraint_of_infer_type` (demo12-15): 「曖昧でない場所では巻き戻さない」
+- `{ [K in` と `{ [key:` を 4 トークン目で分ける先読み `is_start_of_mapped_type` (メモ 2.1)
+- AST の互換: `null` を `TSNullKeyword` にする (typescript-estree に合わせる。メモの `null` の節)
+
+**コツ 4 の実例 (「出会う落とし穴」。デモ済み)**:
+- tuple の rest 検査: tsc は型を解決するチェッカーが出す TS1265 を、oxc は構文の見た目で近似
+  → `readonly` / `ReadonlyArray` / エイリアス / `ns.Array<X>` は見逃す (demo11-14)。AST には影響しない
+- 適合率: 正しいコードは 100% 通し、間違いを弾くのは 62.56% (未対応のバックログが 987 件)
+- JSDoc の `*` (`JSDocAllType`) は未移植 (tsc 6.0 にあり、ts-go 7.x にもある)。`function(...)` 型は ts-go でも無い
+
+**未確認 / 発表前に直しておくこと**:
+- 3者の図の「typescript-estree は tsc の AST を変換」は `convert.js` を読んで確認済み。「oxc は typescript-estree の形に合わせる」は
+  oxc 側のコメント (`Parse null as TSNullKeyword ... to align with typescript eslint`) と出力の一致から。oxc の公式説明は探していない
+- E の TS1338 (infer の位置) は 1.3 のメモに「tsc でもチェッカーが報告」とあるが、tsc のソースでは再確認していない
+- H (`namespace string {}`) は知識ベース。デモを作って oxc/tsc で確認してから使う
+- ファイル図の呼び出し経路 (`lib.rs` の `parse` → `parse_program` → `js/statement.rs` → `ts/*`) は、分岐の2か所 (`js/statement.rs:191,910`) と各ファイルの行数を確認しただけ。図に載せるならパース全体の流れを実行して確かめる
 
 ### 1.4 `parse_postfix_type_or_higher` (358-408) 読み始め
 
