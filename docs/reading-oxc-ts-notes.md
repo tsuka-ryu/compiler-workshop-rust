@@ -621,11 +621,302 @@ C を軸に B の補強 (typescript.rs の 53行中40行) を入れるのが今�
 E は毛色が違い (コードの細部でなくエコシステムの構造)、聴衆が TS ユーザー中心なら
 こちらの方が刺さるかもしれない。
 
+### 1.4 `parse_postfix_type_or_higher` (358-408) 読み始め
+
+`let mut ty = self.parse_non_array_type();` — ここで取れるのは型文法の**一番下の階層 (primary/atom)**。
+まだ postfix (`!` / `?` / `[]`) が付く前の「型の核」で、キーワード型 (`string`/`number`/...) /
+リテラル型 / `this` / `typeof x` / `{...}` (object型 or mapped) / `[...]` (タプル) / `(...)` (括弧型) /
+`import(...)` / テンプレートリテラル型 / それ以外は `parse_type_reference` (識別子, `Foo.Bar`, `Foo<T>`)
+に分配される。この後 `parse_postfix_type_or_higher` のループが `ty` に `!`/`?`/`[]` を後付けしていく。
+
+#### `Kind::Question` 分岐 — `T?` (JSDoc nullable) と `T extends U ? A : B` の `?` の区別
+
+```rust
+if self.lookahead(|p| {
+    p.bump_any();              // `?` を仮に食べる
+    p.is_start_of_type(false)  // その次のトークンが型を開始できるか
+}) {
+    return ty;  // conditional の `?` だった → 食べずに ty を返す
+}
+```
+
+`self.lookahead` は checkpoint → closure実行 → **結果に関わらず必ず rewind** なので、
+このif自体はカーソル位置を一切変えない「2トークン先読み」。判定の理屈:
+
+- `?` の次が型の開始トークンでない (`;` などで終わる) → `T?` (postfix nullable) 確定。
+  この後の `self.bump_any()` で実際に `?` を消費し `JSDocNullableType` を作る
+- `?` の次が型の開始トークン (`T extends U ? A : B` の `A` など) → conditional の
+  `? trueType : falseType` に見える → **`?` を消費せず** `return ty`。呼び出し元を
+  さかのぼって `parse_ts_type` の conditional 分岐まで戻り、そこの `self.expect(Kind::Question)`
+  が同じ `?` を消費する
+
+「実際に消費するのは判定が終わった後の本処理側だけ」という、投機と実消費を分離する
+このファイルに繰り返し出てくる型のパターンがここにも。
+
+#### なぜ TS パーサーに JSDoc 型が混ざっているのか
+
+oxc の `oxc_parser` は `.ts` 専用ではなく **`.js` の JSDoc コメント型注釈** (`/** @type {string} */`)
+もこの型パーサーで面倒を見ている。なので `parse_non_array_type` / `parse_postfix_type_or_higher` には
+TS の文法と JSDoc 独自の文法 (`T?` nullable / `T!` non-nullable / `*` any型 など) が同じ関数の中に
+混在している。
+
+**実装は不揃い**: `?`(`JSDocNullableType`)と`!`(`JSDocNonNullableType`)は実装済みだが、
+`parse_non_array_type` (411あたり) にコメントアウトで残る `*` (`JSDocAllType`) や
+`JSDocFunctionType` は tsc 原文だけ残して**未移植**。TS本体の文法 (union/intersection/keyof/...)
+がきっちり移植されているのに対し、JSDoc側は「困ったときだけ足す」程度の扱いに見える。
+これも Session 1.3 で見た「未移植=優先度の判断」の一例。
+
+未移植コメントの中身 (types.rs:431-444、1.3で見た「コメントアウトされた他人のコード」パターン):
+
+```rust
+// TODO: js doc types: `JSDocAllType`, `JSDocFunctionType`
+// Kind::StarEq => {
+// scanner.reScanAsteriskEqualsToken();
+// falls through
+// }
+// Kind::Star => {
+// return parseJSDocAllType();
+// }
+// case SyntaxKind.QuestionQuestionToken:
+// // If there is '??', treat it as prefix-'?' in JSDoc type.
+// scanner.reScanQuestionToken();
+// // falls through
+// case SyntaxKind.FunctionKeyword:
+// return parseJSDocFunctionType();
+```
+
+- **`Star`(`*`) → `JSDocAllType`**: `@type {*}` (「any型」の意味)。`StarEq`(`*=`)の腕が
+  要るのは、通常のJSレキサーが`*=`を1個の複合トークンとして字句解析してしまうから。
+  `*=T`のようなJSDoc構文で`*`の直後に`=`が来ると`*=`にまとまるので、
+  `reScanAsteriskEqualsToken()`で**レキサーに巻き戻させて**`*`と`=`に再分割してから
+  `Star`の腕にフォールスルーする。Session 0の`re-lex`(`<`の再字句解析)と同じ発想が
+  `*=`にも使われている
+- **`QuestionQuestionToken`(`??`) → `FunctionKeyword` → `JSDocFunctionType`**:
+  JSDocには`@type {function(string, number): boolean}`のように`function`キーワードを
+  使う関数型の書き方があり、その手前に`??`(nullish coalescing)が来た場合も同様に
+  `?`2個へ再分割してフォールスルーする
+
+oxcはこの2つを両方未実装のまま放置している。
+
+**ts-go (Microsoft公式のGo移植版、`~/ghq/github.com/microsoft/TypeScript`
+`tsc/internal/parser/parser.go:2804` `parseNonArrayType`) で裏取りした結果、意外な非対称があった**:
+
+```go
+case ast.KindAsteriskEqualsToken:
+    p.scanner.ReScanAsteriskEqualsToken()
+    fallthrough
+case ast.KindAsteriskToken:
+    return p.parseJSDocAllType()   // ← ts-go は実装している
+case ast.KindQuestionQuestionToken:
+    p.scanner.ReScanQuestionToken()
+    fallthrough
+case ast.KindQuestionToken:
+    return p.parseJSDocNullableType()
+case ast.KindExclamationToken:
+    return p.parseJSDocNonNullableType()
+// KindFunctionKeyword の分岐が無い = JSDocFunctionType は無い
+```
+
+- **`JSDocAllType`(`*`)はts-goにちゃんと実装されている** — classic tscからそのまま移植済み。
+  oxcだけがここを未移植
+- **`JSDocFunctionType`(`function(...)`構文)はts-go自身にも無い** — TSチーム自身がJS→Go移植の
+  際にこれを落としている。oxcの未移植はここに関しては「独自の手抜き」ではなく、
+  tsc本家(Go版)も同じ判断をしていた、という裏付けになった
+
+このリポジトリ自体は`go.work`があり中身が丸ごとGoなので、**Microsoft/TypeScriptは既にGo移植を
+本体に統合済み**らしい。classic JSソース(`src/compiler/parser.ts`)が要るときは別クローン
+`~/Documents/ecosystem/TypeScript`を見る(そちらの`parser.ts:4587`が`parseNonArrayType`)。
+
+#### `[` には2つの入口がある — postfix の `[` とタプル型の `[` は別物
+
+`[K, K, K]` のようなタプル型リテラルと、`postfix`ループの `Kind::LBrack` (`T[]`/`T[K]`) は
+**別の場所で処理される完全に別コード**。振り分けの基準は「`[` の前に既にパース済みの型 `ty` が
+あるかどうか」:
+
+- `ty` が無い状態で `[` が出てくる (行頭・`=`の直後など) → `parse_non_array_type` (411あたり) の
+  分配器がそのまま拾って `Kind::LBrack => self.parse_tuple_type()`。`[` 自体が型の**先頭トークン**
+- `ty` が既にある状態で `[` が出てくる (`T[...]`) → `parse_postfix_type_or_higher` のループが
+  postfix として拾う。ここは `T[]`(配列) か `T[K]`(インデックスアクセス) の2択だけで、
+  複数要素・カンマ区切りは扱わない (`T[K, K, K]` という文法自体がTSに存在しない)
+
+#### `null` だけ `TSLiteralType` ではなく `TSNullKeyword` — typescript-estree 仕様への追従
+
+`parse_non_array_type` の `Kind::Null` にコメント: `Parse null as TSNullKeyword instead of
+null literal to align with typescript eslint.`
+
+`true`/`false`/文字列/数値リテラルは `parse_literal_type()` で **`TSLiteralType`**(内部に
+`Literal` ノードを持つ「リテラル型」)として作られるのに、`null` だけは `string`/`number` と
+同じ「キーワード型」グループに混ぜて `parse_keyword_type()` (単に `TSNullKeyword` ノードを作る
+だけ)で処理される。
+
+理由は TS コンパイラ自身の内部AST(`ts.SyntaxKind`)ではなく、**`@typescript-eslint/typescript-estree`**
+(ESLint 向けにTSコードをESTree形式へ変換するパッケージ)の AST 仕様に合わせるため。そちらの
+`AST_NODE_TYPES` では `null` 型が `TSNullKeyword` という専用ノードとして定義されている
+(`TSAnyKeyword`/`TSBooleanKeyword`/`TSNeverKeyword`/...と同じキーワード型ファミリー)。
+
+oxc の `--estree` 出力(実際に `cargo run --example parser -- ... --estree` で見ているJSON)が
+typescript-estree の出力と構造的に一致するようにしているのは、typescript-eslint 向けに書かれた
+既存の ESLint ルールがパーサーだけ oxc(oxlint)に差し替えてもそのまま動くようにするため。
+「TSコンパイラの内部表現に忠実」ではなく「ESLintエコシステムが期待するASTの形に忠実」という、
+ESTree互換性の優先度が単語ひとつのレベルにまで及んでいる例。
+
+##### tsc 側の実測: `null` 型のツリーは **TS 4.0 で変わった** (バージョン依存)
+
+`type A = null;` の AST を、手元の各バージョンの `ts.createSourceFile` で実際にダンプして比較
+(`type B = undefined; type C = true; type D = string;` も同時に出して対比):
+
+| 実装 | `null` | `undefined` | `true` | `string` |
+|---|---|---|---|---|
+| tsc 4.6.3 / 4.8.4 / 5.3.3 / 5.5.2 / 5.9.3 / 6.0.2 / 6.0.3 (**実測**) | `LiteralType > NullKeyword` | `UndefinedKeyword` | `LiteralType > TrueKeyword` | `StringKeyword` |
+| tsc 3.9.10 以前 (**ソース読みのみ**、実行はしていない) | `NullKeyword` (単体) | 同左 | 同左 | 同左 |
+| ts-go 7.1.0-dev (**ソース読みのみ**、Go 未インストールで実行不可) | `LiteralType > NullKeyword` 相当 | — | — | — |
+| oxc `--estree` (**実測**) | `TSNullKeyword` (単体) | `TSUndefinedKeyword` | `TSLiteralType > Literal` | `TSStringKeyword` |
+
+**変わった箇所**: `parseNonArrayType` の `case SyntaxKind.NullKeyword` が、3.9.10 までは
+`VoidKeyword` と同じ腕で `return parseTokenNode<TypeNode>()` (=キーワードのトークンをそのまま
+型ノードにする)、4.0.8 では `TrueKeyword`/`FalseKeyword` と同じ腕に移って
+`return parseLiteralTypeNode()` になっている。変更コミットは
+`eb3645f16b` 「Refactor node factory API, use node factory in parser (#35282)」
+(2020-06-16、TS 4.0)。`null` 専用の変更ではなく、**ノードファクトリー導入リファクタの副作用**
+として `null` が `LiteralType` の内側に入った、という差分に見える (diff の該当箇所は
+`+case SyntaxKind.NullKeyword:` / `-case SyntaxKind.NullKeyword:` の移動だけ)。
+
+ts-go (`tsc/internal/parser/parser.go`) も 4.0 以降の形を引き継いでいる:
+
+```go
+case ast.KindNoSubstitutionTemplateLiteral, ast.KindStringLiteral, ast.KindNumericLiteral,
+     ast.KindBigIntLiteral, ast.KindTrueKeyword, ast.KindFalseKeyword, ast.KindNullKeyword:
+    return p.parseLiteralTypeNode(false)
+```
+
+##### typescript-estree の答え合わせ (実物を読んで確認済み)
+
+`@typescript-eslint/typescript-estree` 8.26.1 の `dist/convert.js:2439`:
+
+```js
+case SyntaxKind.LiteralType: {
+    if (node.literal.kind === SyntaxKind.NullKeyword) {
+        // 4.0 started nesting null types inside a LiteralType node
+        // but our AST is designed around the old way of null being a keyword
+        return this.createNode(node.literal, { type: AST_NODE_TYPES.TSNullKeyword });
+    }
+    return this.createNode(node, { type: AST_NODE_TYPES.TSLiteralType, literal: ... });
+}
+```
+
+**これで経緯が一本につながった**: typescript-estree の AST は TS 3.9 以前の形
+(`null` = キーワード型) を前提に設計されていて、TS 4.0 が `LiteralType` で包むようになった
+とき、**typescript-estree 側が `LiteralType > NullKeyword` を `TSNullKeyword` に剥がして
+互換性を保った**。oxc が `Kind::Null` を最初から `TSNullKeyword` として作るのは、その
+typescript-estree の出力に合わせた結果。
+
+訂正: 以前のメモの「`TSNullKeyword` は tsc 自身の AST には存在しない」は **不正確**。
+TS ≤3.9 では `null` 型はキーワード単体のノードで、現行の tsc (4.0〜6.0 / ts-go) が
+変わっただけ。oxc は「tsc の現行 AST とは違う」が「tsc の昔の AST・typescript-estree とは同じ」。
+
+再実行 (tsc):
+
+```js
+const ts = require('<typescriptのパス>');
+const sf = ts.createSourceFile('x.ts', 'type A = null;', ts.ScriptTarget.Latest, true);
+// sf.statements[0].type.kind → LiteralType、その子が NullKeyword
+```
+
+#### `string`/`number`/`boolean` は予約語じゃない — `.` の1トークン先読みで見分ける
+
+`parse_non_array_type` の `Kind::Any | Kind::Unknown | Kind::String | ... | Kind::Null` の腕:
+
+```rust
+if self.lexer.peek_token().kind() == Kind::Dot {
+    self.parse_type_reference()   // 修飾名として読む
+} else {
+    self.parse_keyword_type()     // プリミティブ型として読む
+}
+```
+
+TSでは`string`/`number`/`boolean`等は**予約語ではない**ので、識別子として(namespace名などに)
+使える:
+
+```ts
+namespace string {
+  export type Foo = number;
+}
+type X = string.Foo;  // ← ここの `string` はプリミティブ型ではなく namespace 名
+```
+
+これを素直に`parse_keyword_type()`で処理すると`string`だけ読んで`TSStringKeyword`を作った
+時点で終わり、後ろの`.Foo`が浮いてエラーになる。なので**直後が`.`かだけ先に覗いて**、
+続くなら「プリミティブ型ではなく修飾名の先頭」と判断し`parse_type_reference`に回す。
+`Kind::Minus`(直後が数値なら負数リテラル)と同じ「1トークン覗いて2つの文法を振り分ける」パターン。
+
+`parse_tuple_type` 自体の詳細 (named tuple member の曖昧性など) は Session 2.2 に回す。
+
+### 型パーサー全体地図 (1.1-1.4 時点)
+
+1.4 まで読んだところで、降下ルートと「あちこちから戻ってくる再入ポイント」の全体像を整理。
+
+#### 主降下ルート — 優先順位が固定されたはしご
+
+```
+parse_ts_type (15)
+  ├─ まず function/constructor 型かだけ判定 → 該当なら丸ごとバイパスして
+  │   parse_function_or_constructor_type (46) へ (1.2 で読了。中の params/戻り値型で
+  │   parse_ts_type に戻る再入あり)
+  └─ そうでなければ parse_union_type_or_higher (245) へ … `|`
+       └ parse_intersection_type_or_higher (241) … `&`
+         └ parse_type_operator_or_higher (282) … 前置 keyof/unique/readonly/infer
+           └ parse_postfix_type_or_higher (358) … 後置 `!`/`?`/`[]`/`[K]`
+             └ parse_non_array_type (411) … primary の大分配器
+                ├ keyword型 (string/number/…) → parse_keyword_type (504、配管のみ)
+                ├ リテラル (str/true/false/数値) → parse_literal_type
+                ├ `{` → is_start_of_mapped_type で投機 → parse_mapped_type (655) / parse_type_literal (697)
+                ├ `[` → parse_tuple_type (978、Session 2.2)
+                ├ `(` → parse_parenthesized_type (1109)
+                ├ `import(...)` → parse_ts_import_type (1151)
+                ├ `typeof` → parse_type_query
+                ├ `asserts` → 投機 → parse_asserts_type_predicate (810) / parse_type_reference
+                ├ テンプレート → parse_template_type (772、Session 2.3)
+                └ それ以外 (識別子等) → parse_type_reference (822、配管のみ) →
+                    parse_ts_type_name (左結合の `.` ループ) + 型引数は `<` の re-lex (Session 0/3.3 を再利用)
+```
+
+**conditional (`extends ... ? ... : ...`) はこのはしごのどこにもぶら下がらない** —
+`parse_ts_type` 自身が `ty` を読み終えた**直後**(15-44)に自分で `extends` の有無を見て、
+自分で3つの枝を読む。はしごの外側にいる特別扱い。
+
+#### 再入ポイント — `parse_ts_type` に戻ってくる場所たち
+
+はしごは一直線に見えて、実際は色んな場所から`parse_ts_type`(または`Self::parse_ts_type`)
+に**戻ってくる**呼び出しがあり、木というよりグラフに近い。実コードを grep して洗い出した一覧:
+
+| 呼び出し元 | 何のために戻るか | 行 |
+|---|---|---|
+| `parse_ts_type` 自身 | conditional の3枝 (extends_type/trueType/falseType) | 26, 30, 33 |
+| `parse_constraint_of_infer_type` | `infer T extends U` の `U` | 345, 349 |
+| `parse_postfix_type_or_higher` | `T[K]` の `K` (インデックスアクセス) | 392 |
+| `parse_mapped_type` | `[K in T]` の制約式 / `as` 名前型 | 658, 660 |
+| `parse_parenthesized_type` | `(...)` の中身 | 1109 |
+| `parse_tuple_type` / タプル要素 | 各要素の型 | 1050, 1079 |
+| `parse_return_type` → `parse_type_or_type_predicate` | 関数型の戻り値型 (`x is T` 上乗せの専用入口) | 1329-1338 |
+| `parse_ts_import_type` | `import("mod").Foo` の中身 | 1151 |
+| `try_parse_type_arguments` / `parse_type_arguments_in_expression` | `<T, U>` の各要素 (delimited list の callback) | 872, 898, 936 |
+| `parse_ts_type_constraint` / `parse_ts_default_type` | 型パラメータの `extends U = V` | 751, 759 |
+| `parse_template_type` | テンプレート型の `${T}` 部分 | 772, 788 |
+
+`parse_type_literal` (`{ ... }` の object型) だけは違う経路で、`parse_ts_type_signature`
+(Session 3.1 `parse_signature_member` 一族) に委譲していて、メンバー型は間接的にしか
+`parse_ts_type` に戻らない。ここは Session 3.1 で深追いする。
+
+**読み方の要点**: 「はしごを降りて `parse_non_array_type` で primary を1個読む」→
+「その primary の中に別の型が埋まっていたら、そこで `parse_ts_type` を呼んで**はしごの一番上から
+やり直す**」の繰り返し。だから全経路は結局 `parse_ts_type` (15) と `parse_non_array_type` (411)
+の2つを通る、というロードマップの「読み方のコツ」の一文が実データで裏付けられた。
+
 ## 進捗
 
 - [x] Session 0: checkpoint / rewind / re-lex
-- [ ] Session 1: 型式コア (1.1 parse_ts_type / 1.2 関数型 / 1.3 前半 union・intersection 読了。
-      次は `parse_type_operator_or_higher` 282 から)
+- [x] Session 1: 型式コア (1.1 parse_ts_type / 1.2 関数型 / 1.3 union・intersection・前置演算子・infer /
+      1.4 postfix・non_array_type 完了。次は Session 2)
 - [ ] Session 2: 型の難所
 - [ ] Session 3: signature member / try_parse_type_arguments
 - [ ] Session 4: ts/statement.rs + modifiers.rs

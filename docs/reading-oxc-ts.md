@@ -56,18 +56,19 @@ parse_ts_type                          types.rs:15   … conditional は最上�
       後半: 前置演算子は投機不要、`readonly` の事後検査、
       `parse_constraint_of_infer_type` の「曖昧なときだけ投機」、
       パーサー/チェッカーの境界線 (`keyof infer U` が通る理由)。メモ・demos 参照
-- [ ] 1.4 `parse_postfix_type_or_higher` (358) + `parse_non_array_type` (411) の match を地図として眺める —
-      **match の腕の一覧 = 型の開始トークン集合の定義** という視点で
+- [x] 1.4 `parse_postfix_type_or_higher` (358) + `parse_non_array_type` (411) の match を地図として眺める —
+      **match の腕の一覧 = 型の開始トークン集合の定義** という視点で。
+      postfix の `?`/`[` は `is_start_of_type` で1トークン先読みして振り分け (JSDoc 型との同居)、
+      `[` の入口は postfix とタプル型で別物、`null` が `TSNullKeyword` な理由 (typescript-estree 互換・
+      TS 4.0 の AST 変更)、`string.Foo` (キーワードが識別子になる) の `.` 先読み。
+      **型パーサー全体地図** (降下ルート + `parse_ts_type` への再入ポイント表) をメモに作成。
+      `parse_keyword_type` / `parse_type_reference` は配管のみなので読み飛ばし。メモ・demos 参照
 
 > 🔖 **次回の再開地点 (2026-09-20 時点)**
 >
-> `parse_constraint_of_infer_type` (types.rs:335-356) の復習は完了。`None` の意味
-> (曖昧解消の合図)・`Context::DisallowConditionalTypes` が動的スコープのフラグである
-> こと・4分岐 (extends なし / フラグ立ち / 曖昧+採用 / 曖昧+rewind) を demo13-15 で
-> 全網羅済み。`infer T extends U` が TS 4.7 後発の拡張という経緯もメモ済み。詳細はメモの
-> 「1.3 後半」セクションと `demos/oxc-step1/README.md`。
->
-> **次は 1.4** `parse_postfix_type_or_higher` + `parse_non_array_type` から。
+> Session 1 (型式コア) は 1.4 まで完了。次は **Session 2** (mapped / tuple / template /
+> predicate / infer) から。全体地図はメモの「型パーサー全体地図」を参照。
+> (1.3 の `parse_constraint_of_infer_type` は demo13-15 で4分岐を全網羅済み)
 
 **回収済みの問い**: conditional が union より上の理由 → `(A|B) extends C ? X : Y`。メモ参照。
 **式パーサーとの対比が一番の学び**: 型は演算子が少ないので階層を関数で固定した素朴な再帰下降。
@@ -101,16 +102,16 @@ parse_ts_type                          types.rs:15   … conditional は最上�
 **回収済みの問い**: 成功と判定する条件 → 閉じ `>` の直後が「式を開始できないトークン」
 または `(` / テンプレート。demo2 (`a < b > c`) の失敗理由もメモ参照。
 
-## Session 4: TS 固有の文 — `ts/statement.rs` (~2-3h)
+## Session 4 (縮小・流し読みのみ): TS 固有の文 — `ts/statement.rs` (~30分)
 
-- [ ] 4.1 enum (~21) / type alias (~128) / interface (~224) — 素直なので速い
-- [ ] 4.2 module declaration 一族 (~392) — `namespace X {}` / `module "foo" {}` / `global {}`。
-      `X.Y.Z` ネストの再帰表現 (~494)
-- [ ] 4.3 `parse_declaration` (~584) / `at_start_of_ts_declaration` (~811 → 現 894) —
-      **`declare` は予約語ではない** ので識別子か modifier かを lookahead で決める
-- [ ] 4.4 `modifiers.rs` (934 行) — `try_parse_modifier` (~550) の投機パターン。
-      キーワード3階級 (メモ参照) の3段目が全員ここにいる。
-      「TS に予約語を増やせなかった歴史」をざっと眺める
+> 2026-09-20 判断: 4.2-4.4 はスキップ。理由は下記「スキップした理由」参照。
+> 4.1 だけ enum/interface/type alias の形をさらっと確認して終わる。
+
+- [ ] 4.1 enum (~21) / type alias (~128) / interface (~224) — 素直なので速い。ここだけ読む
+- ~~4.2 module declaration 一族 (~392)~~ — skip
+- ~~4.3 `parse_declaration` / `at_start_of_ts_declaration` (`declare` の lookahead 判定)~~ — skip
+  (1.2 の `abstract` peek 判定・3.3 の `<T>` 判定と同じ手筋の繰り返しなので新規性が薄い)
+- ~~4.4 `modifiers.rs` (`try_parse_modifier` の投機パターン)~~ — skip (同上)
 
 ## Session 5: JS 式パーサーへの食い込み — 曖昧性の最前線 (~3h)
 
@@ -128,12 +129,26 @@ parse_ts_type                          types.rs:15   … conditional は最上�
 
 **回収済みの問い**: `a < b > c` は .ts で `(a < b) > c` (demo2 で実証済み)。
 
-## Session 6 (任意): 仕上げ — class/function の TS 装飾 (~1-2h)
+## Session 6 (丸ごとスキップ): 仕上げ — class/function の TS 装飾
 
-- [ ] 6.1 `js/function.rs` — return type / `this` パラメータ / declare function。
-      `parse_formal_parameters` (45) は Session 1.2 の関数型から呼ばれていた部品
-- [ ] 6.2 `js/class.rs` — parameter properties / abstract / accessor
-- [ ] 6.3 `js/module.rs` — `import type` / `export type` / `import x = require(...)`
+> 2026-09-20 判断: 丸ごとスキップ。理由は下記「スキップした理由」参照。
+
+- ~~6.1 `js/function.rs` — return type / `this` パラメータ / declare function~~
+- ~~6.2 `js/class.rs` — parameter properties / abstract / accessor~~
+- ~~6.3 `js/module.rs` — `import type` / `export type` / `import x = require(...)`~~
+
+## Session 4・6 をスキップした理由
+
+今回の主目的は「式と型で文法が別」を体で覚えること (下記「読み方のコツ」参照)。
+Session 4 の 4.2-4.4 は **新しい仕組みがない** — `declare` の識別子/modifier判定や
+`try_parse_modifier` の投機は、1.2 (`abstract` peek) や 3.3 (`<T>` 判定) で
+**すでに見た手筋の繰り返し**。Session 6 は「既存のJS文法にTSの装飾を1個足す」だけで、
+型文法そのものの新しい仕組みは出てこない。
+
+対して **Session 2** (mapped/tuple/template/infer本体、未見の構文が多い) と
+**Session 5** (`as`/`satisfies`/`!`/インスタンス化/アロー曖昧性 — 式パーサーとTSが
+ガチでぶつかる、ロードマップ自身が「一番おいしい」と言っている場所) は優先度を落とさない。
+Session 3 の残り (3.1/3.2) も型文法の続きなので優先。
 
 ---
 
@@ -150,9 +165,9 @@ parse_ts_type                          types.rs:15   … conditional は最上�
 ## 進捗サマリ
 
 - [x] Session 0: checkpoint / rewind / re-lex (完了)
-- [ ] Session 1: 型式コア (1.1 済み / 残り 1.2-1.4)
+- [x] Session 1: 型式コア (1.1-1.4 完了)
 - [ ] Session 2: mapped / tuple / template / predicate / infer
 - [ ] Session 3: signature member (3.3 は先取り済み / 残り 3.1-3.2)
-- [ ] Session 4: ts/statement.rs + modifiers.rs
+- [ ] Session 4 (縮小): 4.1 だけ流し読み。4.2-4.4 はスキップ
 - [ ] Session 5: as / satisfies / `!` / instantiation / arrow 曖昧性
-- [ ] Session 6: class / function / module の TS 装飾
+- [x] Session 6: 丸ごとスキップ (2026-09-20 判断)
