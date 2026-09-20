@@ -1,0 +1,106 @@
+TS-ESTree AST:
+{
+  "type": "Program",
+  "body": [
+    {
+      "type": "TSTypeAliasDeclaration",
+      "id": {
+        "type": "Identifier",
+        "decorators": [],
+        "name": "D",
+        "optional": false,
+        "typeAnnotation": null,
+        "start": 5,
+        "end": 6
+      },
+      "typeParameters": {
+        "type": "TSTypeParameterDeclaration",
+        "params": [
+          {
+            "type": "TSTypeParameter",
+            "name": {
+              "type": "Identifier",
+              "decorators": [],
+              "name": "T",
+              "optional": false,
+              "typeAnnotation": null,
+              "start": 7,
+              "end": 8
+            },
+            "constraint": null,
+            "default": null,
+            "in": false,
+            "out": false,
+            "const": false,
+            "start": 7,
+            "end": 8
+          }
+        ],
+        "start": 6,
+        "end": 9
+      },
+      "typeAnnotation": {
+        "type": "TSConditionalType",
+        "checkType": {
+          "type": "TSInferType",
+          "typeParameter": {
+            "type": "TSTypeParameter",
+            "name": {
+              "type": "Identifier",
+              "decorators": [],
+              "name": "U",
+              "optional": false,
+              "typeAnnotation": null,
+              "start": 18,
+              "end": 19
+            },
+            "constraint": null,
+            "default": null,
+            "in": false,
+            "out": false,
+            "const": false,
+            "start": 18,
+            "end": 19
+          },
+          "start": 12,
+          "end": 19
+        },
+        "extendsType": {
+          "type": "TSStringKeyword",
+          "start": 28,
+          "end": 34
+        },
+        "trueType": {
+          "type": "TSTypeReference",
+          "typeName": {
+            "type": "Identifier",
+            "decorators": [],
+            "name": "U",
+            "optional": false,
+            "typeAnnotation": null,
+            "start": 37,
+            "end": 38
+          },
+          "typeArguments": null,
+          "start": 37,
+          "end": 38
+        },
+        "falseType": {
+          "type": "TSNeverKeyword",
+          "start": 41,
+          "end": 46
+        },
+        "start": 12,
+        "end": 46
+      },
+      "declare": false,
+      "start": 0,
+      "end": 47
+    }
+  ],
+  "sourceType": "script",
+  "hashbang": null,
+  "start": 0,
+  "end": 48
+}
+Parsed Successfully.

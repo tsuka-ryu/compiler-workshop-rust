@@ -78,6 +78,31 @@ demo12 は `parse_constraint_of_infer_type` の **checkpoint なし経路** (343
 conditional の extends 節は既に `DisallowConditionalTypes` が立っているので、後続の `?` で
 再解釈される余地がなく、投機せずに制約を読める。
 
+## 追加: `parse_constraint_of_infer_type` の分岐を全網羅
+
+関数の中身 (types.rs:335-356) は実質2つの `if` で4パターンに分かれる。demo12 が
+「フラグが立っている」枝、以下の3つが残りの枝。
+
+| デモ | 入力 | 分岐 | 結果 |
+|---|---|---|---|
+| demo13 | `type A<T> = T extends (infer U)[] ? U : T;` | ①`extends`自体がない→即 `None` | `infer U`(制約なし)。`constraint: null` |
+| demo12 | `type D<T> = T extends infer U extends string ? U : never;` | ②フラグ立ってる→checkpoint なしで確定 | `infer U`に`string`制約。`? U : never`は外側 conditional |
+| demo14 | `type C<T> = infer U extends string;` | ③フラグ立ってない(曖昧)→checkpoint、直後が`?`でない→採用 | `infer U`に`string`制約。rewind なし |
+| demo15 | `type D<T> = infer U extends string ? U : never;` | ③フラグ立ってない(曖昧)→checkpoint、直後が`?`→rewind | `TSConditionalType`。checkType が `infer U`(制約なし)、`extends string ? U : never`は外側 conditional として読み直し |
+
+**demo14 と demo15 の対比が肝**: 入力の先頭は同じ `infer U extends string` で、
+`checkpoint` を取って一旦 `string` まで読むところまで完全に同じ処理が走る。
+分岐点は読み終えた**直後の1トークンだけ** (`;` か `?` か)。`;` なら「読んだ制約は本物」と
+確定して採用、`?` なら「実は外側 conditional の extends_type を読んでしまっていた」と判断して
+その読みを丸ごと捨て (`rewind`)、`infer U` (制約なし) を確定してから `extends string ? U : never`
+を **もう一度、今度は `parse_ts_type` の conditional 分岐として** 読み直す。
+
+demo13 と demo14/demo15 の対比: demo13 は `infer U` の直後が `)` (=`Kind::Extends` ではない) なので
+関数の最初の `if !self.at(Kind::Extends)` で即 `None` になり、checkpoint すら取らない。
+demo14/15 は直後が `extends` なので、その先の枝 (checkpoint あり/なし) まで進む。
+「`extends` があるかどうか」→「フラグが立っているか」→「(曖昧なら) 直後が `?` か」という
+3段階の絞り込みが、この関数の全体像。
+
 ## Q2: なぜ `extends` の前の改行で conditional を打ち切るのか (types.rs:22)
 
 | デモ | 入力 | 結果 |

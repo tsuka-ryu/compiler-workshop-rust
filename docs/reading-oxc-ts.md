@@ -59,17 +59,15 @@ parse_ts_type                          types.rs:15   … conditional は最上�
 - [ ] 1.4 `parse_postfix_type_or_higher` (358) + `parse_non_array_type` (411) の match を地図として眺める —
       **match の腕の一覧 = 型の開始トークン集合の定義** という視点で
 
-> 🔖 **次回の再開地点 (2026-09-13 時点)**
+> 🔖 **次回の再開地点 (2026-09-20 時点)**
 >
-> 1.3 まで読了。次は **1.4** から。
+> `parse_constraint_of_infer_type` (types.rs:335-356) の復習は完了。`None` の意味
+> (曖昧解消の合図)・`Context::DisallowConditionalTypes` が動的スコープのフラグである
+> こと・4分岐 (extends なし / フラグ立ち / 曖昧+採用 / 曖昧+rewind) を demo13-15 で
+> 全網羅済み。`infer T extends U` が TS 4.7 後発の拡張という経緯もメモ済み。詳細はメモの
+> 「1.3 後半」セクションと `demos/oxc-step1/README.md`。
 >
-> ただし 1.3 の最後に読んだ `parse_constraint_of_infer_type` (types.rs:335-356) は
-> 疲れて頭に入りきらなかったので、**軽く復習してから 1.4 に入る**と接続が良い。
-> 要点は「`infer T extends U ? A : B` の `extends` が制約か conditional の一部か」を、
-> **制約として読んでみて直後が `?` なら読みすぎと判断して rewind** する後出し解決。
-> ただし `infer` は普通 conditional の extends 節の中 (= `DisallowConditionalTypes` が立っている)
-> にいるので、その通常経路では曖昧性がなく投機不要 (343-346)。
-> 詳細はメモの「1.3 後半」セクション。
+> **次は 1.4** `parse_postfix_type_or_higher` + `parse_non_array_type` から。
 
 **回収済みの問い**: conditional が union より上の理由 → `(A|B) extends C ? X : Y`。メモ参照。
 **式パーサーとの対比が一番の学び**: 型は演算子が少ないので階層を関数で固定した素朴な再帰下降。

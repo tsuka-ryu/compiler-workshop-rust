@@ -412,6 +412,33 @@ union/intersection が中置だったのに対しこちらは左端に演算子�
 doc コメント (326-334) が2ケースを明示。Session 0 の「曖昧でない場所では投機しない」の
 いちばん凝った実例。
 
+**4分岐を demo で全網羅** (`demos/oxc-step1/README.md` 追記分): `extends` 自体がない即 `None`
+(demo13) / フラグ立ってて checkpoint なし (demo12) / 曖昧だが直後が `?` でないので採用 (demo14) /
+曖昧で直後が `?` なので rewind (demo15)。demo14 と demo15 は入力の先頭 `infer U extends string`
+が完全に同一で、読み終えた直後の1トークン (`;` か `?` か) だけで採用/破棄が分かれるのが対比の肝。
+
+`None` を返したときに何が起きるか (`parse_constraint_of_infer_type` の呼び出し元は types.rs:319
+`parse_type_parameter_of_infer_type`) を追った:
+
+1. `extends` がそもそもない場合 → 何も読まず即 `None`。`TSTypeParameter.constraint` が `None` になり
+   `infer T` (制約なし) として確定。これが実は **infer の元々の・今も主流の書き方**
+   (`type ElementType<T> = T extends (infer U)[] ? U : T;` のように制約なしで使うのが基本形)。
+   `infer T extends U` の制約付き構文は後発 (下記) なので、「まず `extends` の有無だけ見る」という
+   コードの形が歴史的な順序をそのまま反映している
+2. 曖昧で rewind した場合 → `constraint` は `None` になるが、**カーソル位置は `extends` の直前まで
+   巻き戻っている**。`parse_infer_type` は制約なしの `TSInferType` を返し、それが union/intersection/
+   postfix の階層を素通りして `parse_ts_type` まで戻る。`parse_ts_type` は checkType を読み終えた後に
+   「次が `extends` か」を見るので、巻き戻された `extends` をそこで検出し、**今度は外側 conditional の
+   extends 節として** 読み直す。つまり `type X<T> = infer U extends V ? A : B` は
+   `(infer U) extends V ? A : B` という1個の conditional (checkType = `infer U`) に確定する。
+   `None` は「読み損ねた」ではなく「この `extends` は自分の担当ではない」という積極的な合図
+
+**`infer T extends U` (制約付き) の経緯**: `infer` 自体は TS 2.8 (2018) からある classic な機能で
+最初から制約なし。`infer T extends U` は **TS 4.7 (2022)** で追加された後発の拡張で、推論結果に
+上限を設けたい用途 (`T extends [first: infer F extends string, ...unknown[]] ? F : never` など)。
+つまり oxc のこの関数が「曖昧なとき」を気にするのは、後から増築された構文が既存の
+`extends ... ? ... :` と字面上ぶつかったから、という TS 言語進化の副産物。
+
 #### パーサーとチェッカーの境界線 = ローカルな情報で判定できるか
 
 `type C<T> = keyof infer U;` (demo11) は **oxc がエラーなしで通す**。`infer` は conditional の

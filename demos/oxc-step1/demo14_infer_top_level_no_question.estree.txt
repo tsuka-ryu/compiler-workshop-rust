@@ -1,0 +1,80 @@
+TS-ESTree AST:
+{
+  "type": "Program",
+  "body": [
+    {
+      "type": "TSTypeAliasDeclaration",
+      "id": {
+        "type": "Identifier",
+        "decorators": [],
+        "name": "C",
+        "optional": false,
+        "typeAnnotation": null,
+        "start": 5,
+        "end": 6
+      },
+      "typeParameters": {
+        "type": "TSTypeParameterDeclaration",
+        "params": [
+          {
+            "type": "TSTypeParameter",
+            "name": {
+              "type": "Identifier",
+              "decorators": [],
+              "name": "T",
+              "optional": false,
+              "typeAnnotation": null,
+              "start": 7,
+              "end": 8
+            },
+            "constraint": null,
+            "default": null,
+            "in": false,
+            "out": false,
+            "const": false,
+            "start": 7,
+            "end": 8
+          }
+        ],
+        "start": 6,
+        "end": 9
+      },
+      "typeAnnotation": {
+        "type": "TSInferType",
+        "typeParameter": {
+          "type": "TSTypeParameter",
+          "name": {
+            "type": "Identifier",
+            "decorators": [],
+            "name": "U",
+            "optional": false,
+            "typeAnnotation": null,
+            "start": 18,
+            "end": 19
+          },
+          "constraint": {
+            "type": "TSStringKeyword",
+            "start": 28,
+            "end": 34
+          },
+          "default": null,
+          "in": false,
+          "out": false,
+          "const": false,
+          "start": 18,
+          "end": 34
+        },
+        "start": 12,
+        "end": 34
+      },
+      "declare": false,
+      "start": 0,
+      "end": 35
+    }
+  ],
+  "sourceType": "script",
+  "hashbang": null,
+  "start": 0,
+  "end": 36
+}
+Parsed Successfully.
