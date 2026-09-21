@@ -1,0 +1,4 @@
+  0..1   Ident            "a"
+  2..3   LAngle           "<"
+  5..6   Ident            "b"
+  6..7   Semicolon        ";"

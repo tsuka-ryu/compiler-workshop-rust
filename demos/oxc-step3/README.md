@@ -123,6 +123,38 @@ if let Expression::TSInstantiationExpression(expr) = extend {   // 式側が成�
 つまり `<` で始まる式は、**「ジェネリックなアロー関数として読めるか」を先に試して、失敗したら型アサーション**
 の順で読まれる (投機の失敗時にエラーも巻き戻すために `checkpoint_with_error_recovery` を使う。Session 5.5 で読む場所)。
 
+## `<<` を割って失敗したとき: 収集済みトークン列の書き戻し (demo13)
+
+`a << b;` (ただのシフト演算)。`parse_member_expression_rest` の `<` の腕で、`<<` を型引数の開始と見て**割り**、型として
+読み進めて**失敗**し、`rewind` する、という流れ。`js/expression.rs` の失敗側の分岐のコメント
+(`re_lex_as_typescript_l_angle` が収集済みのトークン列の `<<` を `<` で上書きしてしまうので、`rewind` の後に書き戻す) の実演。
+
+**呼び出し順** (`demo13_shift_left_fail.flow.txt`):
+
+```
+parse_member_expression_rest  [ShiftLeft @2]
+  parse_type_arguments_in_expression  [ShiftLeft @2]
+    ** [checkpoint] at 2
+    ** [re_lex L] at 2                 ← `<<` を `<` に割る (このとき収集済みの列の最後も `<` で上書きされる)
+    parse_ts_type  [LAngle @3]         ← 残りの `<b;` を型として読もうとする (関数型の型パラメータ `<b>` と見て進み、EOF まで行く)
+    ...
+    ** [re_lex R] at 8
+    ** [rewind] from 8 back to 2       ← 失敗。パーサーの現在トークンを `<<` に戻す
+parse_binary_expression_rest  [ShiftLeft @2]   ← シフト演算として読み直す
+```
+
+**収集済みトークン列** (`tokens_dump`。下流のツールに渡すために集めておく列) を、書き戻しの有無で比べた:
+
+| | 収集済みトークン列 |
+|---|---|
+| ① 書き戻しあり (通常) `demo13_shift_left_fail.tokens.txt` | `a` / **`ShiftLeft "<<"`** (2..4) / `b` / `;` |
+| ② 書き戻しを一時的に無効にした場合 `demo13_shift_left_fail.tokens-without-writeback.txt` | `a` / **`LAngle "<"`** (2..3) / `b` / `;` ← `<<` が `<` に化けて、4 文字目が消える |
+
+`rewind` が戻すのは、パーサーの状態とレキサーの位置だけで、**「集めたトークンの列」(外部に渡すためのバッファ) は別のもの**なので
+自動では戻らない。だから失敗側の分岐で `self.lexer.rewrite_last_collected_token(self.token)` を手で呼ぶ。② は `expression.rs:933` の
+その1行を一時的にコメントアウトして採った (採取後に oxc は revert 済み)。パースの結果 (AST) は同じでも、**トークン列だけが壊れる**ので、
+トークンを使う下流のツール (ハイライトなど) 向けの後始末。トークンの収集が無効な設定 (`NoTokensLexerConfig`) では何もしない (no-op)。
+
 ## `<` の 3 つの読み方の整理
 
 | `<` が現れる場所 | 読み方 | 担当 | 曖昧性の解き方 |

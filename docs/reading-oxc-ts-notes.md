@@ -735,6 +735,7 @@ LT では触れずにブログ側へ回す。トリビアのタイトル案:
 | 13 | TS 専用のパーサーは無い | 同じパーサーが `is_ts` (54か所) で TS の枝を切り替える。`.js` に型注釈を書くと普通の JS としてエラー | 2.3 の節の「`is_ts` フラグ」 |
 | 14 | AST は1つで JS と TS が混ざる | `TSLiteralType` の中に JS の `TemplateLiteral` が入る。`--estree` はその1つの木を書き出しただけ | 2.3 の節の「AST は1つ」 |
 | 15 | tsc の移植の上に足された近道 | `at_start_of_ts_declaration` の高速経路は tsc・ts-go に無い。同じ判定を2か所に書き写し「exactly 一致」とコメントで保証 (`is_start_of_type` の2重管理・`<` の早期リターンも同種) | 4.1 の節の「高速経路」 |
+| 21 | プロファイルの1番のホットスポットは、tsc の移植のままの無駄だった | `parse_call_expression_rest` が式の葉ごとに member-rest を再走査していた。tsc・ts-go も同じ形で最適化していない。oxc は1つの `if` で約13%高速化 (PR #23063、AST はバイト単位で同一) | 5.2 の節 |
 | 16 | `class A extends B<string> {}` は `<string>` が2回読まれる | 式側の投機が `{` で失敗して rewind し、`try_parse_type_arguments` で読み直す (改行や `implements` が続くと成功する) | 3.3 見直しの節、demos/oxc-step3 の demo6・11・12 |
 | 17 | `1 + 1 as number / 2` の `as` は思ったより優先順位が低い | 型を消すだけの除去ツールと意味が食い違う問題 (TypeScript#63527) → ts-go#4192 (Anders) → oxc#22986 (Boshen) が ts-go のマージから約16時間で追従。「`as` の優先順位がこんなに低いとは」と驚く人が多数 | 5.1 の節 |
 | 18 | 式は Pratt、型は階層を関数で固定した再帰下降 | `parse_binary_expression_rest` (演算子が多い) と `parse_union_type_or_higher` → ... (演算子が `\|` `&` 程度)。自作の Pratt と並べられる | 5.1 の節 |
@@ -2147,6 +2148,66 @@ semicolon after a statement, but found ...` になる (oxc の実測で、キャ
 - 作者 (Boshen) が oxc の中心的な作者で、同日にほかの PR も出していそう (推測)
 - 判断も速い: リリースやバグ報告を待たず、ts-go のマージの翌日に取り込んでいる。tsc の実装を oxc のコードの隣に
   そのまま並べて保つ設計 (コメントアウトで tsc の原文を残す等、1.3 の「移植とは何を捨てるかの選択」) と整合する
+
+### 5.2 読み始め: `parse_lhs_expression_or_higher_impl` (`js/expression.rs:752`) — 左辺式を1つ読む関数と、PR #23063 の近道
+
+**左辺式 (LeftHandSideExpression) を1つ読む関数**。`f<T>(x)` の全体を作っていたのはここ (これまでのトレースで
+`parse_lhs_expression_or_higher` → `parse_primary_expression` → `parse_member_expression_rest` → `parse_call_expression_rest` と出てきた)。
+名前の `lhs` は Left-Hand-Side (代入の左辺になれる形の式: `a.b`・`f(x)`・`a?.b`)、`_or_higher` は「この段階かそれより強く結合する段階まで」、
+`_impl` は本体 (入口の `parse_lhs_expression_or_higher` が `with_pure_comments` = `/* @__PURE__ */` の処理で包んで呼ぶ)。
+
+```rust
+let primary = self.parse_primary_expression();                          // ① 最初の1つ (`f`)
+let member_expression = self.parse_member_expression_rest(start, primary, &mut in_optional_chain, true);  // ② 後置 (`.b` `[0]` `!` `<T>`)
+let lhs = if matches!(self.cur_kind(), Kind::LParen | Kind::QuestionDot) {
+    self.parse_call_expression_rest(start, member_expression, &mut in_optional_chain)   // ③ `(` か `?.` なら呼び出しの続き
+} else { member_expression };
+// 最後に、`?.` があれば (`in_optional_chain`) 全体を ChainExpression で包む (map_to_chain_expression)
+```
+
+`f<T>(x)` は「② の中で `<T>` が、③ の中で `(x)` が付く」順 (ES の `MemberExpression` = `a.b` `a[0]` タグ付きテンプレート、
+`LeftHandSideExpression` = それに `(...)` か `?.` が付いたもの、に対応)。`map_to_chain_expression` の `match` に
+`Expression::TSNonNullExpression` の腕があり、`a?.b!` の `!` は**オプショナルチェーンの中に入る要素**として扱われる (5.2 の入口)。
+
+**`(` / `?.` のガードのコメントの訳**: 「完全にパースし終わった `MemberExpression` が `LeftHandSideExpression` に伸びるのは、
+`Arguments` (`(`) か `OptionalChain` (`?.`) を経由するときだけ (ES の仕様の該当節)。だから、それ以外のときは
+`parse_call_expression_rest` (と、その中の重複したメンバー式の再走査) を飛ばす」。
+
+**この近道は PR #23063 (`perf(parser): skip parse_call_expression_rest when no call follows`、Boshen、2026-06-07 09:00Z →
+12:16Z マージ、+20 −21、2ファイル) で入った** (`gh pr view` で確認):
+
+| 項目 | 内容 |
+|---|---|
+| 何を | `(` か `?.` が続かないとき `parse_call_expression_rest` を呼ばない。呼び出し元が1か所だけだった `parse_member_expression_or_higher` もインライン化し、読み順が `primary` → `member_expression` → `lhs` の上から下になる |
+| なぜ | `parse_call_expression_rest` の `loop` は中でもう一度 `parse_member_expression_rest` を実行する。**プロファイルで「1番のホットスポット」**。式の葉 (`a`・`1` など) ごとに無駄なメンバー式の再走査を払っていた。`sample` のプロファイルでは式の LHS の連鎖がパース時間の**約50%** |
+| 正しさ | 振る舞いを変えない。`(` でも `?.` でもないとき `parse_call_expression_rest` は no-op。`a<T>()` は影響なし (`<T>` は member-rest で消費され `cur` が `(` になる)。**estree (AST・スパン・トークン) が `main` とバイト単位で同一**、メモリ割り当てのスナップショットも同一 |
+| 効果 | 式が密な 2.5 MB のファイルで約22.6 ms → 約19.7 ms、**約13%高速化**。CodSpeed は kitchen-sink.tsx で +5.62%。混在した実際のコードでは中立 (節約は式の葉ごと) |
+
+PR コメントに「`(` / `?.` のガードは経験則ではなく仕様に忠実」の節があり、ES の文法 (`CallExpression : MemberExpression Arguments` と
+`OptionalExpression : MemberExpression OptionalChain`) を引用している。**tsc と ts-go の実装は同じ形で同じ重複した member-rest の再入を
+持ち、最適化していない** (PR の本文の記述)。oxc が結果を保ったまま無駄を省いた例で、4.1 の `at_start_of_ts_declaration` の高速経路や
+`parse_type_arguments_in_expression` の早期リターンと同じ種類の話 (前の「近道は #23063 と一致するようだが断定できない」は、PR を読んで確認できた)。
+
+#### `<<` を割って失敗したとき: 収集済みトークン列の書き戻し (demos/oxc-step3 の demo13)
+
+`parse_member_expression_rest` の `<` の腕 (と `parse_call_expression_rest` の `?.<`) の失敗側にある、コメント付きの書き戻し
+(`self.lexer.rewrite_last_collected_token(self.token)`)。コメントの訳: 「`re_lex_as_typescript_l_angle` は収集済みのトークン列の元の `<<` を、
+読み直した単独の `<` で上書きしてしまっているかもしれない。rewind はパーサーの現在のトークンを元に戻したので、その `<` の上に元のトークンを
+書き戻す。トークン収集が静的に無効なとき (`NoTokensLexerConfig`) は何もしない」。Session 0 のメモの「失敗時の `<<` 書き戻し」の後始末そのもの。
+
+`rewind` が戻すのはパーサーの状態とレキサーの位置だけで、**下流のツールに渡す「集めたトークンの列」は別のバッファ**なので自動では戻らない
+(`lexer/typescript.rs:17-30` にも同じ趣旨の説明)。必要になるのは「`<<` を割って、しかも型引数として失敗する」入力だけ (`a << b;` など。
+`Foo<<T>() => T>` や `f<<T>() => T>(x)` は成功するので不要、`a < b > c` は `<` が最初から単独なので上書きされない)。
+
+実測 (`a << b;`、`tokens_dump` で収集済みトークン列を出す。書き戻しの1行を一時的にコメントアウトして比較):
+
+| | 収集済みトークン列 |
+|---|---|
+| 書き戻しあり (通常) | `a` / `ShiftLeft "<<"` (2..4) / `b` / `;` |
+| 書き戻しを無効にした場合 | `a` / **`LAngle "<"` (2..3)** / `b` / `;` ← `<<` が `<` に化けて1文字分が消える |
+
+パースの結果 (AST) は同じでも**トークン列だけが壊れる**ので、トークンを使う下流のツール向けの後始末。トレースは `demo13_shift_left_fail.flow.txt`
+(`[checkpoint]` → `[re_lex L]` → `parse_ts_type` → `[rewind] from 8 back to 2` → `parse_binary_expression_rest` がシフトとして読み直す)。
 
 ## 進捗
 
