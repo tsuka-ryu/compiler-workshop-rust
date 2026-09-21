@@ -1,0 +1,19 @@
+ESTree AST:
+{
+  "type": "Program",
+  "body": [],
+  "sourceType": "script",
+  "hashbang": null,
+  "start": 0,
+  "end": 0
+}
+
+  x Expected a semicolon or an implicit semicolon after a statement, but found
+  | none
+   ,----
+ 1 | a!;
+   :  ^
+   `----
+  help: Try inserting a semicolon here
+
+Parsed with Errors.

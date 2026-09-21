@@ -154,10 +154,18 @@ parse_ts_type                          types.rs:15   … conditional は最上�
       ts-go のマージから約16時間で追従): `1 + 1 as number / 2` を空白で消すと値が変わる問題を、パースエラーにして
       括弧を付けさせる意図的な breaking change (7.0)。10+3ケースの実測で「食い違う」5件と「oxc がエラー」5件が一致。
       デモは demos/oxc-step5。メモ参照
-- [ ] 5.2 postfix `!` (TSNonNullExpression, ~896 → 現 915) — optional chain との絡み (`a?.b!`)
-- [ ] 5.3 `<T>expr` 型アサーション (~1235/1257) — .ts のみ (.tsx では JSX と衝突)
-- [ ] 5.4 `TSInstantiationExpression` (~770/1020/1122 → 現 920-935 で一部確認済み) —
-      `foo<T>` を式として残すやつ。失敗時の `<<` 書き戻し (929/1130) は Session 0 で確認済み
+- [x] 5.2 postfix `!` (TSNonNullExpression, ~896 → 現 915) — optional chain との絡み (`a?.b!`)。
+      `!` の腕そのものは3行 (`is_ts` で腕を分け、`!` の前の改行で後置でなくす)。面白いのは `?.` と組み合わさったときの木の形:
+      oxc は typescript-estree と全ケースで一致 (`Chain(NonNull(Member?(a, b)))` など)、tsc は `ChainExpression` を持たず
+      `OptionalChain` フラグで表す。`parse_lhs_expression_or_higher_impl` の `map_to_chain_expression` の `TSNonNullExpression` の腕が橋渡し。
+      `.js` では `!` を後置として読まない。`parse_lhs_expression_or_higher_impl` の `(` / `?.` ガードは PR #23063 の近道 (約13%高速化)。
+      デモは demos/oxc-step5b。メモ参照
+- [ ] 5.3 `<T>expr` 型アサーション (~1235/1257) — .ts のみ (.tsx では JSX と衝突)。
+      入口は demo10 のトレース (demos/oxc-step3) で確認済み: 式の先頭の `<` はアロー関数を先に試し、失敗したら `parse_ts_type_assertion`。
+      (2026-09-21 にいったんスキップにしたが、やはり読むことにした)
+- ~~5.4 `TSInstantiationExpression` (~770/1020/1122 → 現 920-935 で一部確認済み)~~ — スキップ (2026-09-21)。
+  `parse_member_expression_rest` の `<` の腕、失敗時の `<<` 書き戻し (demo13)、class の `extends` との絡み (demo6・11・12) は
+  demos/oxc-step3 で確認済み。`error_if_unparenthesized_instantiation_expression` は読んでいない
 - [ ] 5.5 `js/arrow.rs:18` `try_parse_parenthesized_arrow_function_expression` —
       アロー曖昧性の TS 版。唯一 `checkpoint_with_error_recovery` を使う場所 (365)。
       カバー文法 (tsc/仕様) との対比はメモの「曖昧性への対処は3階層」参照
@@ -205,5 +213,5 @@ Session 3 の 3.1 (`parse_signature_member`) は分岐するだけの部品、3.
 - [x] Session 2: mapped / tuple / template / predicate / infer (2.5 は 1.3 で完了扱い)
 - [x] Session 3: 3.3 は先取り + 見直し (2026-09-21、demos/oxc-step3) で完了 / 3.1・3.2 はスキップ (2026-09-20 判断)
 - [x] Session 4 (縮小): 4.1 は呼び出し元と高速経路まで読んだ (2026-09-21)。4.2・4.4 はスキップ
-- [ ] Session 5: as / satisfies / `!` / instantiation / arrow 曖昧性
+- [ ] Session 5: 5.1 as/satisfies・5.2 `!` は完了、5.4 はスキップ (トレースで入口は確認済み)、残りは 5.3 `<T>expr` と 5.5 arrow 曖昧性
 - [x] Session 6: 丸ごとスキップ (2026-09-20 判断)

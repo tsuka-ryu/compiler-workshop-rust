@@ -1,0 +1,44 @@
+TS-ESTree AST:
+{
+  "type": "Program",
+  "body": [
+    {
+      "type": "ExpressionStatement",
+      "expression": {
+        "type": "ChainExpression",
+        "expression": {
+          "type": "TSNonNullExpression",
+          "expression": {
+            "type": "CallExpression",
+            "callee": {
+              "type": "Identifier",
+              "decorators": [],
+              "name": "a",
+              "optional": false,
+              "typeAnnotation": null,
+              "start": 0,
+              "end": 1
+            },
+            "typeArguments": null,
+            "arguments": [],
+            "optional": true,
+            "start": 0,
+            "end": 5
+          },
+          "start": 0,
+          "end": 6
+        },
+        "start": 0,
+        "end": 6
+      },
+      "directive": null,
+      "start": 0,
+      "end": 7
+    }
+  ],
+  "sourceType": "script",
+  "hashbang": null,
+  "start": 0,
+  "end": 8
+}
+Parsed Successfully.

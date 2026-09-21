@@ -2209,6 +2209,44 @@ PR コメントに「`(` / `?.` のガードは経験則ではなく仕様に忠
 パースの結果 (AST) は同じでも**トークン列だけが壊れる**ので、トークンを使う下流のツール向けの後始末。トレースは `demo13_shift_left_fail.flow.txt`
 (`[checkpoint]` → `[re_lex L]` → `parse_ts_type` → `[rewind] from 8 back to 2` → `parse_binary_expression_rest` がシフトとして読み直す)。
 
+#### 5.2 `!` の腕は3行。面白いのは `?.` と組み合わさったときの木の形 (demos/oxc-step5b)
+
+`parse_member_expression_rest` の `Kind::Bang if self.is_ts && !self.cur_token().is_on_new_line()` の腕は、`!` を食べて
+`TSNonNullExpression` で包むだけ (`is_ts` で腕を分けるのは `<` の腕と同じ作り、改行の裁定は `as` の腕と同じ ASI)。実測で面白かったのは
+`?.` との木の形 (oxc・typescript-estree 8.26.1・tsc 6.0.3 を並べた、11ケース):
+
+| 入力 | oxc / typescript-estree | tsc (`⛓` = `NodeFlags.OptionalChain` が付いたノード) |
+|---|---|---|
+| `a?.b!` | `Chain(NonNull(Member?(a, b)))` | `NonNull(Prop?⛓(a, b))` (`!` が末尾なら NonNull はフラグ無しでチェーンの外側) |
+| `a?.b!.c` | `Chain(Member(NonNull(Member?(a, b)), c))` | `Prop⛓(NonNull⛓(Prop?⛓(a, b)), c)` (`!` が途中なら `NonNull⛓`) |
+| `(a?.b)!.c` | `Member(NonNull(Chain(Member?(a, b))), c)` (括弧がチェーンを閉じる) | `Prop(NonNull(Paren(Prop?⛓(a, b))), c)` |
+| `a` 改行 `!b` | 2文 (`a` と `!b`) | 同じ |
+| `a!` (`.js`) | エラー (`!` を後置と読まない) | `NonNull(a)` (tsc は JS でも木は作る) |
+
+- **oxc の木は typescript-estree と全ケースで一致** (括弧のノードの有無だけ違う)。`null` を `TSNullKeyword` にするのと同じ「ESTree の形に合わせる」方針
+- **tsc は `ChainExpression` を持たず、ノードに `OptionalChain` フラグを付ける**作り。oxc は `parse_lhs_expression_or_higher_impl` が `in_optional_chain` の旗を見て、
+  `map_to_chain_expression` で式全体を `Chain` に包む。この `match` の **`TSNonNullExpression` の腕が、`a?.b!` の `NonNull` を `Chain` の中に入れる橋渡し**
+  (腕が無いと `NonNull` が `Chain` の外に出る)
+- **`a?.b!.c` は全体が1つの `Chain`**、`(a?.b)!.c` は括弧で `Chain` が閉じて外側の `.c` は含まれない (`?.` が失敗したとき `.c` も `undefined` になるかの違い)
+- **`.js` では `!` を後置として読まない**: `as` (`.js` でも読んでエラーだけ出す) と違い、`is_ts` が偽だと `!` の腕に入らず、次の文の読み込みが「セミコロンが必要」のエラーにする
+- **改行は `!` の前だけ見る** (`Kind::Bang if self.is_ts && !self.cur_token().is_on_new_line()` の `is_on_new_line()` は「今のトークン (`!`) の直前に
+  改行があったか」の旗)。曖昧になるのは「`!` が後置か、次の文の前置 `!b` か」だけなので (ASI の考え方)、`!` の**後**の改行には規則が無い。実測 (oxc):
+
+  | 入力 (`⏎` = 改行) | 木 |
+  |---|---|
+  | `a⏎!b` | `a` ; `!b` (2文。`!` の前の改行で後置でなくなる) |
+  | `a!⏎.b` | `Member(NonNull(a), b)` (`!` の後の改行は関係なく `.b` が続く) |
+  | `a!⏎(x)` | `Call(NonNull(a))` |
+  | `a!⏎!b` | `NonNull(a)` ; `!b` (1つ目の `!` は後置、2つ目は前に改行があるので別の文) |
+
+  `!` を食べた後は `parse_member_expression_rest` の `loop` に戻って次のトークンを見るだけで、改行の有無は見ない (`a⏎.b` がメンバーアクセスとして読める
+  JS の普通のルールと同じ)。`as` の腕の改行 (`var x = foo⏎as (Bar)`) も `as` の**前**の改行で、同じ裁定
+- **`?.template`...`` は仕様上不正だが、パーサーは読んでからエラーにする**: `parse_member_expression_rest` の `?.` の腕に
+  `next_kind.is_template_start_of_tagged_template()` の分岐があり、`a?.`x`` も `a?.b`x`` も木を作ってから `parse_tagged_template_rest` の中で
+  `in_optional_chain` が真ならエラー (oxc: `Tagged template expressions are not permitted in an optional chain`、node:
+  `SyntaxError: Invalid tagged template on optional chain` を実測)。読まずに「予期しないトークン」で止めるより分かりやすいメッセージを出せるから、
+  と思われる (推測)。仕様で禁止の理由は確認していない
+
 ## 進捗
 
 - [x] Session 0: checkpoint / rewind / re-lex
@@ -2218,6 +2256,6 @@ PR コメントに「`(` / `?.` のガードは経験則ではなく仕様に忠
 - [x] Session 3: 3.3 (型引数) は先取り + 見直し (2026-09-21、demos/oxc-step3 の呼び出し順トレース) で完了。
       3.1・3.2 はスキップ
 - [x] Session 4 (縮小): 4.1 は呼び出し元と高速経路まで読んだ (2026-09-21)。4.2・4.4 はスキップ
-- [ ] Session 5: JS 式への食い込み (`as` / `satisfies` / `!` / instantiation / arrow 曖昧性)。
+- [ ] Session 5: JS 式への食い込み (5.1 as/satisfies・5.2 `!` は完了、5.4 はスキップ、残りは 5.3 `<T>expr` と 5.5 arrow 曖昧性)。
       `!` と instantiation は `parse_member_expression_rest` の `match` の腕として見えている
 - [x] Session 6: 丸ごとスキップ

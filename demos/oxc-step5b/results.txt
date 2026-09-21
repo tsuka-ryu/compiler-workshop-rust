@@ -1,0 +1,46 @@
+typescript 6.0.3 
+
+## demo1_simple.ts: "a!;"
+   oxc : NonNull(a)
+   tsc : NonNull(a)
+
+## demo2_chain_end.ts: "a?.b!;"
+   oxc : Chain(NonNull(Member?(a, b)))
+   tsc : NonNull(Prop?⛓(a, b))
+
+## demo3_chain_then_member.ts: "a?.b!.c;"
+   oxc : Chain(Member(NonNull(Member?(a, b)), c))
+   tsc : Prop⛓(NonNull⛓(Prop?⛓(a, b)), c)
+
+## demo4_paren_chain.ts: "(a?.b)!.c;"
+   oxc : Member(NonNull(Paren(Chain(Member?(a, b)))), c)
+   tsc : Prop(NonNull(Paren(Prop?⛓(a, b))), c)
+
+## demo5_bang_at_end.ts: "a?.b.c!;"
+   oxc : Chain(NonNull(Member(Member?(a, b), c)))
+   tsc : NonNull(Prop⛓(Prop?⛓(a, b), c))
+
+## demo6_bang_before_chain.ts: "a!.b?.c;"
+   oxc : Chain(Member?(Member(NonNull(a), b), c))
+   tsc : Prop?⛓(Prop(NonNull(a), b), c)
+
+## demo7_computed.ts: "a?.[0]!;"
+   oxc : Chain(NonNull(Member?(a, [0])))
+   tsc : NonNull(Elem?⛓(a, 0))
+
+## demo8_call_bang.ts: "a?.()!;"
+   oxc : Chain(NonNull(Call?(a)))
+   tsc : NonNull(Call?⛓(a))
+
+## demo9_bang_then_call.ts: "a?.b!(x);"
+   oxc : Chain(Call(NonNull(Member?(a, b))))
+   tsc : Call⛓(NonNull⛓(Prop?⛓(a, b)))
+
+## demo10_newline.ts: "a\n!b;"
+   oxc : a  ;  UnaryExpression
+   tsc : a  ;  PrefixUnaryExpression
+
+## demo11_js_mode.js: "a!;"
+   oxc : エラー: Expected a semicolon or an implicit semicolon after a statement, but found
+   tsc : NonNull(a)
+

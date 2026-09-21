@@ -1,0 +1,10 @@
+demo1_simple.ts                    NonNull(a)
+demo2_chain_end.ts                 Chain(NonNull(Member?(a, b)))
+demo3_chain_then_member.ts         Chain(Member(NonNull(Member?(a, b)), c))
+demo4_paren_chain.ts               Member(NonNull(Chain(Member?(a, b))), c)
+demo5_bang_at_end.ts               Chain(NonNull(Member(Member?(a, b), c)))
+demo6_bang_before_chain.ts         Chain(Member?(Member(NonNull(a), b), c))
+demo7_computed.ts                  Chain(NonNull(Member?(a, [0])))
+demo8_call_bang.ts                 Chain(NonNull(Call?(a)))
+demo9_bang_then_call.ts            Chain(Call(NonNull(Member?(a, b))))
+demo10_newline.ts                  a  ;  UnaryExpression
