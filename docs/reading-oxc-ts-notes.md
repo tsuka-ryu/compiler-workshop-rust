@@ -734,6 +734,8 @@ LT では触れずにブログ側へ回す。トリビアのタイトル案:
 | 12 | コメントアウトされた他人のコード | 移植とは何を捨てるかの選択 | 1.3 の LT 有力候補の節 |
 | 13 | TS 専用のパーサーは無い | 同じパーサーが `is_ts` (54か所) で TS の枝を切り替える。`.js` に型注釈を書くと普通の JS としてエラー | 2.3 の節の「`is_ts` フラグ」 |
 | 14 | AST は1つで JS と TS が混ざる | `TSLiteralType` の中に JS の `TemplateLiteral` が入る。`--estree` はその1つの木を書き出しただけ | 2.3 の節の「AST は1つ」 |
+| 15 | tsc の移植の上に足された近道 | `at_start_of_ts_declaration` の高速経路は tsc・ts-go に無い。同じ判定を2か所に書き写し「exactly 一致」とコメントで保証 (`is_start_of_type` の2重管理・`<` の早期リターンも同種) | 4.1 の節の「高速経路」 |
+| 16 | `class A extends B<string> {}` は `<string>` が2回読まれる | 式側の投機が `{` で失敗して rewind し、`try_parse_type_arguments` で読み直す (改行や `implements` が続くと成功する) | 3.3 見直しの節、demos/oxc-step3 の demo6・11・12 |
 
 書き方の方針案: 1 項目 = 入力 1 行 + 結果 (tsc と oxc の出力) + 1〜2 段落。デモは `demos/` から
 そのまま引用できる。**未確認だった事項** (H の `namespace string {}` のデモなど) は、書く前にデモで確認する。
@@ -1829,6 +1831,118 @@ Kind::LAngle | Kind::ShiftLeft if self.is_ts => {
 (5.4: `TSInstantiationExpression`) は、**この1つの `match` の2つの腕**。「TS が JS の式パーサーに埋まっている」の、
 一番わかりやすい形は、TS 固有の後置 (`!` と `<`) と JS の後置 (`.` `[` `?.` テンプレート) が同じ `loop` の中に並んでいること。
 
+### 4.1 読み始め: enum / type alias / interface のパーサーはどこから呼ばれるか
+
+構文の処理そのものは素直なので読まず、**呼び出し元** (`grep` で確認) だけを整理した。3つのパーサー
+(`parse_ts_enum_declaration` `ts/statement.rs:21` / `parse_ts_type_alias_declaration` `:128` /
+`parse_ts_interface_declaration` `:224`) は、**`parse_declaration` (`:640`) の `match` の腕**から呼ばれる
+(`Kind::Type` → `:713`、`Kind::Enum` → `:714`、`Kind::Interface` → `:717`)。そこへ行く道:
+
+```
+parse_statement_list_item (js/statement.rs) ─ is_ts && at_start_of_ts_declaration() ─→ parse_ts_declaration_statement (ts/statement.rs:612)
+                                                                                          └→ parse_declaration (:640) ─ match ─┬ Kind::Type      → type alias
+js/module.rs:657 (`export` の後ろ) ──────────────────────────────────────────────→ parse_declaration                            ├ Kind::Enum      → enum
+                                                                                                                                └ Kind::Interface → interface
+```
+
+| 経路 | 呼び出し元 | どんなとき |
+|---|---|---|
+| ① 普通の文 | `js/statement.rs:191-193` (キーワードの腕: `Abstract` `Accessor` `Static` `Readonly` `Global` など。条件 `self.is_ts && self.at_start_of_ts_declaration()`) → `parse_ts_declaration_statement` → `parse_declaration` (`:629`) | `type A = ...;` / `interface I {}` / `declare ...` など |
+| ② `async` で始まる文 | `js/statement.rs:910-911` (`async function` でなければ、同じ条件で `parse_ts_declaration_statement`) | `async` の後ろが TS の宣言のとき (周りのコードからの読み。走らせていない) |
+| ③ `export` の後ろ | `js/module.rs:657` が `parse_declaration` を直接呼ぶ | `export interface I {}` / `export type A = ...` / `export enum E {}` |
+| ④ `const enum` | `js/statement.rs:880-885` `parse_const_statement` が `parse_ts_enum_declaration` を直接呼ぶ (`const` を食べた後 `self.is_ts && self.at(Kind::Enum)`) | `const enum E {}`。**普通の `enum E {}` は ① → `parse_declaration` の `Kind::Enum` の腕** |
+| ⑤ `export default interface` | `js/module.rs:752-758` が `parse_ts_interface_declaration` を直接呼ぶ | `export default interface I {}` |
+
+訂正: 最初 ③ を「`enum` だけ別で、予約語だから先読みが要らない」と説明したが誤り。`js/statement.rs:880-885` は
+コメントに「Parse const declaration or `const enum`」とある通り **`const enum` の処理**だった。
+
+**境界の対**: 式と文で、TS への入口が対になっている。
+
+- 式: 式のはしごの一番下 `parse_member_expression_rest` の `match` の腕 (`!` / `<`) から `types.rs` へ
+- 文: 文の入口 `parse_statement_list_item` の `is_ts && at_start_of_ts_declaration()` から `ts/statement.rs` へ
+
+トレースでは demo3・demo7・demo8 に `parse_statement_list_item → at_start_of_ts_declaration →
+parse_ts_declaration_statement → parse_declaration → parse_ts_type_alias_declaration` の順が出ている
+(`demos/oxc-step3`)。
+
+#### `at_start_of_ts_declaration` (`ts/statement.rs:863`) の高速経路 — tsc には無い、oxc 独自の最適化と「2重管理」
+
+「ここから TS の宣言が始まるか」の判定。文の入口 (`js/statement.rs` の `is_ts && at_start_of_ts_declaration()`) が呼ぶ。
+コメントの訳:
+
+```
+// 高速経路: キーワード1個で始まる宣言の形は、`cur_kind` (今のトークンの種類) と、多くても1個の先読みトークン
+// (peek) で決まる。だから、ここで解決して、完全な `lookahead` (checkpoint + 投機的な部分パース + rewind)
+// のコストを払わずに済ませる。各腕は、`at_start_of_ts_declaration_worker` の対応する腕と、そのまま一致している。
+```
+
+```rust
+pub(crate) fn at_start_of_ts_declaration(&mut self) -> bool {
+    match self.cur_kind() {
+        Kind::Var | Kind::Let | Kind::Const | Kind::Function | Kind::Class | Kind::Enum => true,
+        Kind::Interface | Kind::Type => { let next = self.lexer.peek_token(); next.kind().is_binding_identifier() && !next.is_on_new_line() }
+        Kind::Module | Kind::Namespace => { /* 次が識別子か文字列で、同じ行 */ }
+        Kind::Global => { /* 次が Ident / { / export */ }
+        Kind::Import => { /* 次が 文字列 / * / { / 識別子 */ }
+        _ => self.lookahead(Self::at_start_of_ts_declaration_worker),   // 複数トークンの形は本物の lookahead に任せる
+    }
+}
+```
+
+**tsc・ts-go にはこの高速経路は無い** (tsc 5.9 の `parser.ts:7250` `isStartOfDeclaration` は `lookAhead(isDeclaration)` のみ、
+ts-go の `parser.go:6123` も `lookAhead(scanStartOfDeclaration)` のみ)。oxc の遅い経路 (`worker`) が tsc の `isDeclaration`
+(`parser.ts:7155`、`while (true) { switch (token()) ... }`) の移植で、**高速経路はその前に oxc が足したもの**。
+oxc が必要とした理由は、コメントの「`lookahead` のコスト」からの推測 (tsc の `lookAhead` はスキャナーの状態だけ
+保存して戻すので軽く、oxc の `checkpoint` (パーサーとレキサーの状態、エラー数など) より軽いのかもしれないが、測っていない)。
+
+**「各腕が `worker` の対応する腕と一致している」の意味**: 同じ判定を2か所に書き写していて、その2つが食い違わないことの
+保証。書き方が違うだけで判定は同じ:
+
+| トークン | 高速経路の腕 | `worker` の腕 |
+|---|---|---|
+| `type` / `interface` | `peek_token()` で次を覗く (消費しない) | `bump_any()` で進めてから見る (`lookahead` の中なので後で巻き戻る) |
+| `module` / `namespace` / `global` / `import` | 同じ条件を `peek_token()` で | 同じ条件を `bump_any()` の後で |
+| `var` `let` `const` `function` `class` `enum` | すぐ `true` | すぐ `true` |
+
+片方だけ直して食い違うと、同じ入力でも高速経路に落ちるか `worker` を通るかで結果が変わる (バグになる)。コメントの
+「exactly」は修正する人への注意。
+
+高速経路が持たない腕 (`declare` `abstract` `export` `async` `static` `readonly` などの複数トークンの形、例:
+`declare const x` / `export type T` / `abstract class C`) は `_` の腕で `worker` に任せる。**そのため `worker` には
+`var` `let` などの高速経路と重複する腕も残っている**: `declare const x` を `worker` が読むとき、`declare` を食べた後の
+`const` を `worker` 自身の `Kind::Const` の腕で判定するから。
+
+**`worker` という名前**: 「実際の作業をする側の関数」につける名前の習慣。入口の関数が前処理 (ここでは高速経路) や
+`lookahead` / `checkpoint` で包むことをして、裏で本体の処理をする関数を `_worker` と呼ぶ。`lookahead` の中で走るので、
+トークンを進めても最後に自動で巻き戻る。トレースにも出る: `is_parenthesized_arrow_function_expression` (入口) →
+`checkpoint` → `is_parenthesized_arrow_function_expression_worker` (作業) → `rewind` (demo9・demo10)。
+`_worker` で終わる関数は「投機や先読みの中で走る本体」の目印: `at_start_of_ts_declaration_worker` (`ts/statement.rs:899`)、
+`is_parenthesized_arrow_function_expression_worker` (`js/arrow.rs:77`)、`is_un_parenthesized_async_arrow_function_worker`
+(`js/arrow.rs:217`)。LT の「読み方のコツ」の目印 (`is_start_of_*` = 先読み / `checkpoint` + `rewind` = 投機 /
+`re_lex_*` = 再読) に **`*_worker` = 投機や先読みの中で走る本体** を足せる。
+
+**`_` の腕のコメント** (`// Multi-token modifier chains ... need real lookahead, as do non-declaration tokens.`) の訳:
+「複数トークンの修飾子の連なり (`declare const x`、`abstract class C`、`export type T`、`async function f`、`static …`) と、
+`export = …` / `export default …` は、本物の lookahead が要る。宣言ではないトークンも同様」。
+
+| ケース | 例 | なぜ1トークンで決まらないか |
+|---|---|---|
+| 修飾子の連なり | `declare const x` / `abstract class C` / `async function f` | 最初のトークンだけでは決まらず、後ろを見る。連なりの長さも決まっていない (`declare abstract class` など) |
+| `export` の形 | `export type T` / `export = …` / `export default …` | `export` の後ろに何が来るかで分かれる |
+| 宣言ではないトークン | `type = 1;` (`type` を変数名として使う式の文) など | 高速経路の腕のどれにも当たらないので `worker` が最後に `_ => return false` を返す |
+
+**注意 (訂正)**: 最初「`foo();` の `foo` のような普通の式も `_` に落ちる」と説明したが誤り。呼び出し元の
+`parse_statement_list_item` (`js/statement.rs:172-193`) が `at_start_of_ts_declaration` を呼ぶのは、
+`Interface` `Type` `Module` `Namespace` `Declare` `Enum` `Private` `Protected` `Public` `Abstract` `Accessor` `Static`
+`Readonly` `Global` の14種類のトークン (かつ `is_ts`) のときだけで、普通の式の文は `_ => parse_expression_or_labeled_statement()`
+に落ちて、この関数は呼ばれない。「宣言ではないトークン」が `_` に来るのは、**このリストのトークンなのに宣言ではなかった
+とき** (`type` などのソフトキーワードを変数名として使った式の文)。
+
+**同じ種類の話**: `is_start_of_type` (型の FIRST 集合を別の場所で列挙し直す、1.4)、`parse_type_arguments_in_expression` の
+「`<` でなければ checkpoint の前に抜ける」早期リターン (3.3)、`parse_type_predicate_prefix` の `peek_token`
+(1トークン先読みは `lookahead` より軽い、2.4)。「oxc は速さのために、tsc の移植の上に1段の近道や2重管理を足している」
+というブログのトリビア候補 (下の表に追加)。
+
 ## 進捗
 
 - [x] Session 0: checkpoint / rewind / re-lex
@@ -1837,7 +1951,7 @@ Kind::LAngle | Kind::ShiftLeft if self.is_ts => {
 - [x] Session 2: 型の難所 (2.1 mapped・2.2 tuple・2.3 template・2.4 predicate・2.5 infer は 1.3 で完了扱い)
 - [x] Session 3: 3.3 (型引数) は先取り + 見直し (2026-09-21、demos/oxc-step3 の呼び出し順トレース) で完了。
       3.1・3.2 はスキップ
-- [ ] Session 4 (縮小): 4.1 だけ流し読み。4.2-4.4 はスキップ
+- [x] Session 4 (縮小): 4.1 は呼び出し元と高速経路まで読んだ (2026-09-21)。4.2・4.4 はスキップ
 - [ ] Session 5: JS 式への食い込み (`as` / `satisfies` / `!` / instantiation / arrow 曖昧性)。
       `!` と instantiation は `parse_member_expression_rest` の `match` の腕として見えている
 - [x] Session 6: 丸ごとスキップ

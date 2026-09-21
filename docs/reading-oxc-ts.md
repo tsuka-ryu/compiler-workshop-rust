@@ -124,14 +124,21 @@ parse_ts_type                          types.rs:15   … conditional は最上�
 **回収済みの問い**: 成功と判定する条件 → 閉じ `>` の直後が「式を開始できないトークン」
 または `(` / テンプレート。demo2 (`a < b > c`) の失敗理由もメモ参照。
 
-## Session 4 (縮小・流し読みのみ): TS 固有の文 — `ts/statement.rs` (~30分)
+## Session 4 (縮小・流し読みのみ): TS 固有の文 — `ts/statement.rs` (~30分) ✅ 完了
 
 > 2026-09-20 判断: 4.2-4.4 はスキップ。理由は下記「スキップした理由」参照。
 > 4.1 だけ enum/interface/type alias の形をさらっと確認して終わる。
 
-- [ ] 4.1 enum (~21) / type alias (~128) / interface (~224) — 素直なので速い。ここだけ読む
+- [x] 4.1 enum (~21) / type alias (~128) / interface (~224) — 構文の処理そのものは読まず、**どこから呼ばれるか**を確認
+      (2026-09-21)。3つとも `parse_declaration` (:640) の `match` の腕から。入口は文の
+      `parse_statement_list_item` の `is_ts && at_start_of_ts_declaration()` で、式側の入口
+      (`parse_member_expression_rest`) と対になる。`const enum` は `parse_const_statement` から直接。
+      予想より面白かったのは **`at_start_of_ts_declaration` の高速経路**: tsc・ts-go には無い oxc 独自の最適化で、
+      同じ判定を高速経路と `_worker` に2か所書き写し「exactly 一致」とコメントで保証している。
+      `_worker` は「投機や先読みの中で走る本体」の名前の習慣。メモ参照
 - ~~4.2 module declaration 一族 (~392)~~ — skip
-- ~~4.3 `parse_declaration` / `at_start_of_ts_declaration` (`declare` の lookahead 判定)~~ — skip
+- ~~4.3 `parse_declaration` / `at_start_of_ts_declaration` (`declare` の lookahead 判定)~~ — skip の予定だったが、
+  4.1 の呼び出し元を追う中で `at_start_of_ts_declaration` と `parse_declaration` の入口は読んだ (上記)
   (1.2 の `abstract` peek 判定・3.3 の `<T>` 判定と同じ手筋の繰り返しなので新規性が薄い)
 - ~~4.4 `modifiers.rs` (`try_parse_modifier` の投機パターン)~~ — skip (同上)
 
@@ -191,6 +198,6 @@ Session 3 の 3.1 (`parse_signature_member`) は分岐するだけの部品、3.
 - [x] Session 1: 型式コア (1.1-1.4 完了)
 - [x] Session 2: mapped / tuple / template / predicate / infer (2.5 は 1.3 で完了扱い)
 - [x] Session 3: 3.3 は先取り + 見直し (2026-09-21、demos/oxc-step3) で完了 / 3.1・3.2 はスキップ (2026-09-20 判断)
-- [ ] Session 4 (縮小): 4.1 だけ流し読み。4.2-4.4 はスキップ
+- [x] Session 4 (縮小): 4.1 は呼び出し元と高速経路まで読んだ (2026-09-21)。4.2・4.4 はスキップ
 - [ ] Session 5: as / satisfies / `!` / instantiation / arrow 曖昧性
 - [x] Session 6: 丸ごとスキップ (2026-09-20 判断)
