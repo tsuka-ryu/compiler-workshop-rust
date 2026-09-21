@@ -101,7 +101,7 @@ parse_ts_type                          types.rs:15   … conditional は最上�
       conditional の `extends` の衝突回避 (~350)。**1.3 で完了扱い**
       (`parse_constraint_of_infer_type` の4分岐を demos/oxc-step1 の demo12-15 で全網羅済み)
 
-## Session 3 (3.3 のみ完了・残りスキップ): signature member と型引数
+## Session 3 (3.3 のみ・残りスキップ): signature member と型引数 ✅ 完了
 
 > 2026-09-20 判断: 3.1・3.2 ともスキップ。理由は下記「スキップした理由」参照。
 
@@ -113,7 +113,13 @@ parse_ts_type                          types.rs:15   … conditional は最上�
 - [x] 3.3 `try_parse_type_arguments` (861) / `parse_type_arguments_in_expression` (914) —
       **`f<T>(x)` vs `f < T > (x)` 問題の本丸**。Session 0-1 で先取り回収済み:
       re-lex の使用箇所 / `<=` を事前に弾く理由 / `can_follow_type_arguments_in_expr` の
-      follow 判定表 (955) / `is_start_of_expression` (1657)。メモ参照
+      follow 判定表 (955) / `is_start_of_expression` (1657)。メモ参照。
+      **2026-09-21 に見直し済み**: oxc の関数呼び出し順を実際に採ったトレース (demos/oxc-step3、12パターン)。
+      式の `f<T>(x)` と `a < b > c` は `can_follow_type_arguments_in_expr` の判定だけで分かれる /
+      型の `<` は投機なしで無条件に読む / 式の先頭の `<` はアロー関数を先に試し、失敗したら型アサーション /
+      `class A extends B<string> {}` は式側の投機が `{` で失敗して `<string>` が2回読まれる。
+      JS と TS の境界は `parse_member_expression_rest` (`js/expression.rs:859`) の `match` の腕
+      (`f<T>(x);` を先頭から通しで追ったメモあり)
 
 **回収済みの問い**: 成功と判定する条件 → 閉じ `>` の直後が「式を開始できないトークン」
 または `(` / テンプレート。demo2 (`a < b > c`) の失敗理由もメモ参照。
@@ -184,7 +190,7 @@ Session 3 の 3.1 (`parse_signature_member`) は分岐するだけの部品、3.
 - [x] Session 0: checkpoint / rewind / re-lex (完了)
 - [x] Session 1: 型式コア (1.1-1.4 完了)
 - [x] Session 2: mapped / tuple / template / predicate / infer (2.5 は 1.3 で完了扱い)
-- [x] Session 3: 3.3 は先取りで完了 / 3.1・3.2 はスキップ (2026-09-20 判断)
+- [x] Session 3: 3.3 は先取り + 見直し (2026-09-21、demos/oxc-step3) で完了 / 3.1・3.2 はスキップ (2026-09-20 判断)
 - [ ] Session 4 (縮小): 4.1 だけ流し読み。4.2-4.4 はスキップ
 - [ ] Session 5: as / satisfies / `!` / instantiation / arrow 曖昧性
 - [x] Session 6: 丸ごとスキップ (2026-09-20 判断)

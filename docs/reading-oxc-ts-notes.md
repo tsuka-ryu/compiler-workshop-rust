@@ -1738,13 +1738,106 @@ TS1338 (`infer` の位置、1.3) はここが出す。1.3 の「ローカルに�
 
 LT の骨格 (地図の図) に `oxc_semantic` の行を足すと、冒頭の問い「oxc は TS をどこまで検査している?」にも答えられる。
 
+### 3.3 見直し: `f<T>(x);` を通しで追う (demos/oxc-step3 の demo1 のトレース)
+
+oxc の関数呼び出し順を採ったトレース (`demos/oxc-step3/`、README にトレースの読み方と12パターンの一覧) を、
+`f<T>(x);` (demo1) の先頭から追う。**`types.rs` に入るのは、トレースの12行目 (`parse_type_arguments_in_expression`)**。
+それまでは全部 `js/` のファイル。
+
+**トレースに出ない一番上**: `parse_program` (`lib.rs:817`)。仕込みが `js/` `ts/` `jsx/` だけで `lib.rs` は入れて
+いないため。実際の入口:
+
+```rust
+// lib.rs:817 parse_program
+self.token = self.lexer.first_token();            // ① 最初のトークン (`f` = Ident @0)
+let hashbang = self.parse_hashbang();             // ② `#!` 行があれば読む      ← トレースの1行目
+self.ctx |= Context::TopLevel;
+let (directives, mut statements) = self.parse_directives_and_statements(false);  // ③ 本体 ← トレースの2行目
+```
+
+- `parse_hashbang` (`js/statement.rs:17`): 現在のトークンが `HashbangComment` かを見るだけ。`f` なので `None`
+- `parse_directives_and_statements` (`js/statement.rs:33`): 文を1つずつ読む `while` ループ。ループの中身は大きく3つ:
+  ①(unambiguous モードのときだけ) 文ごとの `checkpoint` ②`parse_statement_list_item` で1文読む ③最初の文が文字列リテラル
+  だけならディレクティブ (`"use strict"` など) として扱う。**トレースの `** [checkpoint] at 0` はこの文ごとの
+  定型の checkpoint** で、`f<T>(x)` の曖昧性とは関係ない (step0 の README にも同じ注意がある)
+
+**`f<T>(x);` の先頭12行と、どのファイルか**:
+
+| 行 | 関数 | ファイル | 何をしているか |
+|---|---|---|---|
+| 1 | `parse_directives_and_statements` | `js/statement.rs:33` | 文を1つずつ読むループ |
+| 3 | `parse_statement_list_item` | `js/statement.rs:131` | 文の種類を分岐 |
+| 4 | `parse_expression_or_labeled_statement` | `js/statement.rs:251` | 式の文 (`f<T>(x);`) と判断 |
+| 5 | `parse_assignment_expression_or_higher` | `js/expression.rs:1479` | 式の入口 |
+| 6-8 | `try_parse_parenthesized_arrow_function_expression` など | `js/arrow.rs` | アロー関数かを先に試す (`f` で始まるので違う) |
+| 9 | `parse_binary_expression_or_higher` | `js/expression.rs:1304` | 二項演算の優先順位のはしご |
+| 10 | `parse_lhs_expression_or_higher` | `js/expression.rs:748` | 左辺式 (代入の左側になれる式) |
+| 11 | `parse_primary_expression` | `js/expression.rs:228` | `f` を読む |
+| 11 | `parse_member_expression_rest` | `js/expression.rs:859` | `f` の後ろの `.` `[` `<` `(` を見る。**`<` (LAngle @1) が来た** |
+| **12** | **`parse_type_arguments_in_expression`** | **`ts/types.rs:914`** | **ここで初めて `types.rs`** |
+
+- **入口は `js/expression.rs:859` の `parse_member_expression_rest`**。`f` を読み終えた直後の次のトークンが `<` だったので、
+  「型引数かもしれない」と TS の側 (`types.rs`) を呼ぶ
+- `types.rs` に入るときは、必ず**式のはしごの一番下 (`parse_member_expression_rest`) から**。式パーサーが「ここは TS かも
+  しれない」と見て、`types.rs` の関数を呼ぶ。ロードマップの「3つの世界」の3つ目 (JS 側への食い込み: `foo<T>()` などが
+  式パーサーの中に埋まっている) の、実際の入口
+
+#### `parse_member_expression_rest` (`js/expression.rs:859`) — JS と TS の境界は、後置を読む `loop` の中の `match` の腕
+
+`f<T>(x);` の JS 側と TS 側の**境界**は、この関数。左辺の式 (`f`) の後ろに続く後置を、`loop` で1段ずつ積んでいく:
+
+```rust
+let mut lhs = lhs;                          // 最初は `f`
+loop {
+    match self.cur_kind() {                 // 今のトークンで振り分け
+        Kind::Dot                 => { lhs = 静的メンバー }                 // `a.b`
+        Kind::QuestionDot         => { lhs = オプショナルチェーン }          // `a?.b`
+        Kind::LBrack              => { lhs = 計算メンバー }                 // `a[0]`
+        テンプレートの開始         => { lhs = タグ付きテンプレート }          // a`...`
+        Kind::Bang if self.is_ts  => { lhs = TSNonNullExpression }          // `a!`     ← TS
+        Kind::LAngle | Kind::ShiftLeft if self.is_ts => { ... }             // `f<T>`   ← TS (今回の入口)
+        _ => return lhs,
+    }
+}
+```
+
+`a.b[0]!` なら `a` → `a.b` → `a.b[0]` → `a.b[0]!` の順に包み直す。**後置演算子を左から右へ積むループ**。
+
+**`<` の腕**:
+
+```rust
+Kind::LAngle | Kind::ShiftLeft if self.is_ts => {
+    if let Some(arguments) = self.parse_type_arguments_in_expression() {     // ts/types.rs:914
+        lhs = Expression::new_ts_instantiation_expression(self.end_span(lhs_start), lhs, arguments, self);
+    } else {
+        self.lexer.rewrite_last_collected_token(self.token);   // `<<` を割ったのを書き戻す (Session 0 の話)
+        return lhs;                                            // `f` だけ返す。`<` は消費されていない
+    }
+}
+```
+
+1. **後置として `<` が来たから**: `f` の直後の `<` は、JS では比較演算子、TS では型引数の始まりかもしれない。
+   この場所は式の後置を読む場所なので、`.` `[` `!` と並べて `<` も選択肢の1つ
+2. **`if self.is_ts`**: `.js` ではこの腕に入らず `_ => return lhs` に落ちる。`<` は比較演算子として、上の
+   `parse_binary_expression_rest` に任される (`is_ts` の54か所のうちの1つ)
+3. **成功したら `TSInstantiationExpression`** で `lhs` を包む。**`f<T>(x)` の `(x)` はここでは読まれない**。次のループ
+   (実際は `parse_call_expression_rest`) が `(` を見て呼び出しとして読む
+4. **失敗したら `return lhs`**: 呼び出し元 (`parse_binary_expression_rest`) が、消費されていない `<` を比較として読み直す
+   (demo2 `a < b > c` の流れ)
+
+**ロードマップの Session 5 との関係**: `Kind::Bang if self.is_ts` (5.2: `a!`) と `Kind::LAngle | Kind::ShiftLeft if self.is_ts`
+(5.4: `TSInstantiationExpression`) は、**この1つの `match` の2つの腕**。「TS が JS の式パーサーに埋まっている」の、
+一番わかりやすい形は、TS 固有の後置 (`!` と `<`) と JS の後置 (`.` `[` `?.` テンプレート) が同じ `loop` の中に並んでいること。
+
 ## 進捗
 
 - [x] Session 0: checkpoint / rewind / re-lex
 - [x] Session 1: 型式コア (1.1 parse_ts_type / 1.2 関数型 / 1.3 union・intersection・前置演算子・infer /
-      1.4 postfix・non_array_type 完了。次は Session 2)
-- [ ] Session 2: 型の難所 (Session 2 完了: 2.1 mapped・2.2 tuple・2.3 template・2.4 predicate・2.5 infer(1.3 で完了扱い)。次は Session 5)
-- [ ] Session 3: signature member / try_parse_type_arguments
-- [ ] Session 4: ts/statement.rs + modifiers.rs
-- [ ] Session 5: JS 式への食い込み
-- [ ] Session 6: class / function / module
+      1.4 postfix・non_array_type)
+- [x] Session 2: 型の難所 (2.1 mapped・2.2 tuple・2.3 template・2.4 predicate・2.5 infer は 1.3 で完了扱い)
+- [x] Session 3: 3.3 (型引数) は先取り + 見直し (2026-09-21、demos/oxc-step3 の呼び出し順トレース) で完了。
+      3.1・3.2 はスキップ
+- [ ] Session 4 (縮小): 4.1 だけ流し読み。4.2-4.4 はスキップ
+- [ ] Session 5: JS 式への食い込み (`as` / `satisfies` / `!` / instantiation / arrow 曖昧性)。
+      `!` と instantiation は `parse_member_expression_rest` の `match` の腕として見えている
+- [x] Session 6: 丸ごとスキップ
