@@ -1,0 +1,148 @@
+TS-ESTree AST:
+{
+  "type": "Program",
+  "body": [
+    {
+      "type": "TSTypeAliasDeclaration",
+      "id": {
+        "type": "Identifier",
+        "decorators": [],
+        "name": "Dot",
+        "optional": false,
+        "typeAnnotation": null,
+        "start": 5,
+        "end": 8
+      },
+      "typeParameters": {
+        "type": "TSTypeParameterDeclaration",
+        "params": [
+          {
+            "type": "TSTypeParameter",
+            "name": {
+              "type": "Identifier",
+              "decorators": [],
+              "name": "T",
+              "optional": false,
+              "typeAnnotation": null,
+              "start": 9,
+              "end": 10
+            },
+            "constraint": {
+              "type": "TSStringKeyword",
+              "start": 19,
+              "end": 25
+            },
+            "default": null,
+            "in": false,
+            "out": false,
+            "const": false,
+            "start": 9,
+            "end": 25
+          },
+          {
+            "type": "TSTypeParameter",
+            "name": {
+              "type": "Identifier",
+              "decorators": [],
+              "name": "U",
+              "optional": false,
+              "typeAnnotation": null,
+              "start": 27,
+              "end": 28
+            },
+            "constraint": {
+              "type": "TSStringKeyword",
+              "start": 37,
+              "end": 43
+            },
+            "default": null,
+            "in": false,
+            "out": false,
+            "const": false,
+            "start": 27,
+            "end": 43
+          }
+        ],
+        "start": 8,
+        "end": 44
+      },
+      "typeAnnotation": {
+        "type": "TSTemplateLiteralType",
+        "quasis": [
+          {
+            "type": "TemplateElement",
+            "value": {
+              "raw": "",
+              "cooked": ""
+            },
+            "tail": false,
+            "start": 47,
+            "end": 50
+          },
+          {
+            "type": "TemplateElement",
+            "value": {
+              "raw": ".",
+              "cooked": "."
+            },
+            "tail": false,
+            "start": 51,
+            "end": 55
+          },
+          {
+            "type": "TemplateElement",
+            "value": {
+              "raw": "",
+              "cooked": ""
+            },
+            "tail": true,
+            "start": 56,
+            "end": 58
+          }
+        ],
+        "types": [
+          {
+            "type": "TSTypeReference",
+            "typeName": {
+              "type": "Identifier",
+              "decorators": [],
+              "name": "T",
+              "optional": false,
+              "typeAnnotation": null,
+              "start": 50,
+              "end": 51
+            },
+            "typeArguments": null,
+            "start": 50,
+            "end": 51
+          },
+          {
+            "type": "TSTypeReference",
+            "typeName": {
+              "type": "Identifier",
+              "decorators": [],
+              "name": "U",
+              "optional": false,
+              "typeAnnotation": null,
+              "start": 55,
+              "end": 56
+            },
+            "typeArguments": null,
+            "start": 55,
+            "end": 56
+          }
+        ],
+        "start": 47,
+        "end": 58
+      },
+      "declare": false,
+      "start": 0,
+      "end": 59
+    }
+  ],
+  "sourceType": "script",
+  "hashbang": null,
+  "start": 0,
+  "end": 60
+}
+Parsed Successfully.

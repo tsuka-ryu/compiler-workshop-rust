@@ -208,7 +208,8 @@ grep した結果、呼び出しは十数か所で2パターン:
 
 ### re-lex の使用箇所マップ (回収済み)
 
-2段ラッパー経由で、需要は全部「型引数リストの開閉」:
+2段ラッパー経由で、**`<` `>` の再読の**需要は全部「型引数リストの開閉」
+(訂正 2026-09-21: re-lex は他にもある。テンプレートの `}` の再読は下の「テンプレート」を参照):
 
 - 第1段 cursor.rs:276/293 `re_lex_ts_l_angle` / `re_lex_ts_r_angle` —
   トークン種別で何文字戻すか振り分けるだけ (`<<`→2, `<<=`→3 / `>>`→2, `>>>`→3)
@@ -220,6 +221,11 @@ grep した結果、呼び出しは十数か所で2パターン:
   **型は `=` から始まらない** ので `f<=T>` の `=T>` は型引数になりえず、事前に弾く
 
 Session 3 ではこの3関数の中身 (成功と判定する条件) を読む。
+
+- **テンプレートの `}` の再読 (2.3 で追加)**: `cursor.rs:242` `re_lex_template_substitution_tail` →
+  レキサー側 `lexer/template.rs:398` `next_template_substitution_tail`。呼び出しは4か所:
+  型 `ts/types.rs:773, 789` (`parse_template_type`) と、式 `js/expression.rs:571, 583`
+  (`parse_template_literal`)。型と式で同じ作りを共有している。`<` `>` と違って型引数とは無関係
 
 ## Session 1: 型式コア (2026-09-13 開始、15-44行まで)
 
@@ -726,6 +732,8 @@ LT では触れずにブログ側へ回す。トリビアのタイトル案:
 | 10 | 型の中に JSDoc が住んでいる | `T?` を JSDoc nullable と conditional の `?` で読み分ける。`*` は未移植 | 1.4 の JSDoc の節 |
 | 11 | Microsoft 自身も落とした機能 | `JSDocFunctionType` は tsc 6.0 にあり、ts-go 7.x で無い | 1.4 の JSDoc の節 (比較表) |
 | 12 | コメントアウトされた他人のコード | 移植とは何を捨てるかの選択 | 1.3 の LT 有力候補の節 |
+| 13 | TS 専用のパーサーは無い | 同じパーサーが `is_ts` (54か所) で TS の枝を切り替える。`.js` に型注釈を書くと普通の JS としてエラー | 2.3 の節の「`is_ts` フラグ」 |
+| 14 | AST は1つで JS と TS が混ざる | `TSLiteralType` の中に JS の `TemplateLiteral` が入る。`--estree` はその1つの木を書き出しただけ | 2.3 の節の「AST は1つ」 |
 
 書き方の方針案: 1 項目 = 入力 1 行 + 結果 (tsc と oxc の出力) + 1〜2 段落。デモは `demos/` から
 そのまま引用できる。**未確認だった事項** (H の `namespace string {}` のデモなど) は、書く前にデモで確認する。
@@ -1355,12 +1363,165 @@ oxc は rev `1aa5ec11ce`、リンクは `../../../oxc-project/oxc/` 配下。
 未確認: `readonly` / エイリアスの見逃しを oxc が把握しているか (テストに名指しの項目は無かった)。
 **推測**: oxc はフォーマッタ・リンタ・変換が主用途で、型の誤りは tsc を別に走らせて検出する前提。
 
+### 2.3 `parse_template_type` (types.rs:762) — テンプレートリテラル型と `}` の再読
+
+**4種類のトークン** (`lexer/template.rs`、ECMAScript 仕様の名前)。実際にレキサーが出した列
+(`tokens_dump` で実測):
+
+```
+type A = `abc`;
+  9..14  NoSubstitutionTemplate  "`abc`"          ← `${}` が無い。全体で1トークン
+
+type B = `a${string}b${number}c`;
+ 25..29  TemplateHead      "`a${"                 ← 先頭: バッククォートから `${` まで
+ 29..35  String            "string"               ← `${ }` の中身は普通のトークン
+ 35..39  TemplateMiddle    "}b${"                 ← 途中: `}` から次の `${` まで
+ 39..45  Number            "number"
+ 45..48  TemplateTail      "}c`"                  ← 末尾: `}` からバッククォートまで
+```
+
+| トークン | 形 | いつ出るか |
+|---|---|---|
+| `NoSubstitutionTemplate` | `` `...` `` | `${}` が1つも無い |
+| `TemplateHead` | `` `...${ `` | `${` で終わる最初の部分 |
+| `TemplateMiddle` | `` }...${ `` | 途中の `}` から次の `${` まで |
+| `TemplateTail` | `` }...` `` | 最後の `}` からバッククォートまで |
+
+`${...}` の中の式や型は、普通のトークン (`String` / `Number` など) として間に挟まる。
+
+`parse_non_array_type` の振り分けは、`NoSubstitutionTemplate` はそのままリテラル型 (`TSLiteralType`)、
+`TemplateHead` は `parse_template_type` へ。`${}` の有無で別のトークンの種類に分かれているのが、
+テンプレートリテラルを読む入口の分岐。
+
+**`TemplateHead` の腕の流れ** (`` `a${string}b${number}c` `` で追う):
+
+```rust
+Kind::TemplateHead => {
+    quasis.push(self.parse_template_element(tagged));   // ① `a${` を文字列部分として登録
+    types.push(self.parse_ts_type());                    // ② `string` を型として読む
+    self.re_lex_template_substitution_tail();            // ③ `}` を読み直す (レキサーとの連携)
+    while self.fatal_error.is_none() {
+        match self.cur_kind() {
+            Kind::TemplateTail   => { quasis.push(..); break; }   // ④ 末尾で終了
+            Kind::TemplateMiddle => { quasis.push(..); }          // ⑤ 途中を登録して次へ
+            Kind::Eof            => { self.expect(Kind::TemplateTail); break; }  // ⑥ 閉じ忘れ
+            _ => { types.push(self.parse_ts_type()); self.re_lex_template_substitution_tail(); } // ⑦ 次の型 → また再読
+        }
+    }
+}
+```
+
+`quasis` (文字列の部分: `a` / `b` / `c`) と `types` (`${}` の中の型) が交互に並ぶ。
+
+**「レキサーとの連携」の正体 = ③ `re_lex_template_substitution_tail`** (`cursor.rs:242`):
+
+```rust
+pub(crate) fn re_lex_template_substitution_tail(&mut self) {
+    if self.at(Kind::RCurly) {
+        self.token = self.lexer.next_template_substitution_tail();   // `}` から読み直し
+    }
+}
+```
+
+型 `string` を読み終えた時点の現在トークンは `}` (`RCurly`)。レキサーは前後の文脈を知らないので、
+`}` を普通の記号として `RCurly` にしている。しかしその後ろはもうテンプレートの文字列部分
+(`b${` や `c` `` ` ``) なので、**パーサーが「ここは `${` の終わりだ」と分かっている側として、レキサーに
+「この `}` から、テンプレートの続きとして読み直して」と頼む**。すると `next_template_substitution_tail`
+(`lexer/template.rs:398`) が `TemplateMiddle` か `TemplateTail` を作り直す。
+
+Session 0 の `<` の re-lex と同じ型 (文脈を知るのはパーサー側なので、パーサーが再読を要請する)。
+`<` では曖昧性の解消 (成功したら確定、失敗したら書き戻す) だったが、こちらは `}` の次が必ずテンプレートの
+続きなので、**必ず再読が要る** (自分の読み。走らせて確かめてはいない)。`NoSubstitutionTemplate` は
+`${}` が無く1トークンで終わるので再読は起きない。
+
+型 (`parse_template_type`) と式 (`parse_template_literal`、`js/expression.rs:555`) は、ほぼ同じ作りで
+`re_lex_template_substitution_tail` を共有している。
+
+**`quasis` と `types` の違い** (`TSTemplateLiteralType`、`oxc_ast/src/ast/ts.rs:1639`):
+
+- `quasis` = 文字列の部分。`types` = `${}` の中の型
+- 交互に並び、**`quasis` は必ず `types` より1つ多い**。先頭や末尾が `${` / `}` で始まる・終わる場合も
+  その位置に空文字列の要素が入る (ソースの doc コメント `ts.rs:1628` に「先頭と末尾の空文字列を含む」とある)
+
+```
+`a${string}b${number}c`  →  quasis ["a","b","c"] / types [string, number]
+`${string}`              →  quasis ["",""]        / types [string]
+`${T}.${U}`              →  quasis ["",".",""]    / types [T, U]
+```
+
+```
+quasis[0]  types[0]  quasis[1]  types[1]  quasis[2]
+   "a"      string      "b"      number      "c"
+```
+
+`quasi` という名前は ESTree のテンプレートリテラル (`quasis` と `expressions`) の用語。型版では
+`expressions` に当たるものが `types`。`parse_template_type` のコードとの対応は、`quasis.push(parse_template_element)`
+が Head / Middle / Tail の文字列部分、`types.push(parse_ts_type)` が `${}` の中の型。while ループでは
+`TemplateMiddle` に出会うたびに `quasis` が1つ増え、その後の `_` の腕で `types` が1つ増える交互の形。
+
+デモ: `demos/oxc-step2` の demo18-25 (README の「テンプレートリテラル型 (2.3)」)。demo18 は `${}` 無しで
+`TSLiteralType`、demo22 は入れ子 (入れ子の深さを数えるコードは無く、再帰がそのまま対応を取る)、
+demo24・25 は閉じ忘れ (`Expected `}` but found `EOF`` / `Unexpected token`)。
+
+#### 2.3 で見えた構造: 文字列部分は式と共有、AST は1つ、`is_ts` フラグ
+
+**文字列部分の読み方は式と型で共通**: `parse_template_element` は `js/expression.rs:625` にあり、型の
+`parse_template_type` (`ts/types.rs:768-781`) もそれを呼ぶ (grep で呼び出しを確認)。
+`${}` が無い型 (`` `abc` ``) は `parse_non_array_type` の `NoSubstitutionTemplate` の腕 (`ts/types.rs:451`) が
+式の `parse_template_literal` をそのまま呼び、結果を `TSLiteralType` で包むだけ。`${}` がある型だけが
+別ループ (`parse_template_type`) で、中身が式ではなく型なので式側の関数は使えないが、部品は共有する。
+
+| | 使う関数 | AST |
+|---|---|---|
+| `${}` なし | 式の `parse_template_literal` | `TSLiteralType(TemplateLiteral)` |
+| `${}` あり | 型の `parse_template_type` (ループだけ別、`parse_template_element` と `}` の再読は共有) | `TSTemplateLiteralType` |
+
+`parse_template_element` がやること: ①`raw` を切り出す (両端の記号を削る: Head/Middle は末尾 `${` の2文字、
+NoSubstitution/Tail は末尾 `` ` `` の1文字) ②エスケープを解釈した `cooked` を作る (不正なら `None`)
+③タグ無しで `cooked` が `None` ならエラー (`tagged` 引数はここで効く) ④最後の要素かの `tail` の印を付けて返す。
+
+**AST は1つで、JS のノードと TS のノードが同じ木に混ざる** (`oxc_ast/src/ast/`):
+
+- TS のノードが JS のノードを持つ: `TSLiteralType.literal` は `TSLiteral` (`ts.rs:226`) で、
+  `BooleanLiteral` / `NumericLiteral` / `StringLiteral` / `TemplateLiteral` (`js.rs:419`) / `UnaryExpression` を持つ
+- JS のノードが TS のノードを持つ: `js.rs` の `type_annotation: Option<Box<TSTypeAnnotation>>` (1225 行など)
+- `--estree` の JSON は、この1つの木をそのまま書き出したもの (各ノードの `ESTree` derive が木を歩く)。
+  先頭の `TS-ESTree AST:` のとおりノード名・形を typescript-estree に合わせた出力で、別の TS 用の木への
+  変換ではない。`null` を `TSNullKeyword` にする話や、`readonly` の `true` / `"+"` / `"-"` はこの出力に合わせる処理
+
+```
+`abc` (型の位置)
+  TSTypeAliasDeclaration   (ts.rs)
+    └ TSLiteralType        (ts.rs)
+        └ TemplateLiteral  (js.rs)  ← 式の `abc` と同じ型
+```
+
+**JS だけのモード = `is_ts` フラグ**: TS 専用パーサーも JS 専用パーサーも無く、**同じパーサーが `is_ts` で
+TS の枝を有効にするかを切り替える**。
+
+```rust
+// lib.rs:695
+is_ts: source_type.is_typescript(),      // SourceType (oxc_span) が拡張子から決める
+```
+
+- 拡張子: `js` / `mjs` / `cjs` / `jsx` / `ts` / `mts` / `cts` / `tsx` (`oxc_span/src/source_type.rs:119`)
+- パーサー内の `self.is_ts` は **54か所**。例: `js/statement.rs:191` (TS の宣言に入るのは TS のときだけ)、
+  `js/expression.rs:915` (式の後ろの `!`)、`:920` (`<` を型引数として試すのは TS のときだけ)
+- 実測: `let x: number = 1;` / `type A = string;` / `f<T>(x);` を、拡張子だけ変えて走らせると、
+  `.ts` は成功、`.js` は `let x: number` のところで「セミコロンが必要」のエラー
+  (型注釈の入口に入らないので TS 構文が普通の JS としてエラーになる)。`.js` では `<` の投機もせず
+  最初から比較演算子として読まれる (最後の点はコードからの推測)
+
+ロードマップの「3つの世界」の3つ目 (JS 側への食い込み: `as` / `satisfies` / `!` / `<T>expr` が式パーサーの中に
+埋まっている) の仕組みそのもので、`is_ts` の分岐がその入口になっている。JSDoc の型 (`T?` / `T!`) を
+どのモードで読んでいるかは未確認。
+
 ## 進捗
 
 - [x] Session 0: checkpoint / rewind / re-lex
 - [x] Session 1: 型式コア (1.1 parse_ts_type / 1.2 関数型 / 1.3 union・intersection・前置演算子・infer /
       1.4 postfix・non_array_type 完了。次は Session 2)
-- [ ] Session 2: 型の難所 (2.1 mapped type・2.2 tuple 完了。次は 2.3 `parse_template_type`)
+- [ ] Session 2: 型の難所 (2.1 mapped type・2.2 tuple・2.3 template 完了。次は 2.4 `parse_type_or_type_predicate`)
 - [ ] Session 3: signature member / try_parse_type_arguments
 - [ ] Session 4: ts/statement.rs + modifiers.rs
 - [ ] Session 5: JS 式への食い込み

@@ -84,7 +84,11 @@ parse_ts_type                          types.rs:15   … conditional は最上�
       tsc ではチェッカーが出していて oxc は構文の見た目で近似 → 見逃しは AST に影響しない。
       `T?` (JSDocNullableType) をタプルの中だけ `TSOptionalType` に読み替える処理。
       デモは demos/oxc-step2 (demo1-17)。メモ参照
-- [ ] 2.3 `parse_template_type` (~777) — テンプレートリテラル型。レキサーとの連携
+- [x] 2.3 `parse_template_type` (~777) — テンプレートリテラル型。レキサーとの連携。
+      4種類のトークン (NoSubstitution / Head / Middle / Tail)、`quasis` (文字列部分) と `types` の交互の形、
+      連携の正体は `}` の再読 (`re_lex_template_substitution_tail`、`<` の re-lex とは別の使い方)。
+      文字列部分 (`parse_template_element`) は式と共有。AST は1つで JS と TS のノードが混ざる、
+      JS だけのモードは `is_ts` フラグ (54か所)。デモは demos/oxc-step2 の demo18-25。メモ参照
 - [ ] 2.4 `parse_type_or_type_predicate` (~1341) + asserts (~815) —
       `x is string` / `asserts x is string`。戻り値型の位置だけで許される文法。
       `parse_return_type` (1329) は Session 1.2 の関数型から呼ばれていた部品
@@ -174,7 +178,7 @@ Session 3 の 3.1 (`parse_signature_member`) は分岐するだけの部品、3.
 
 - [x] Session 0: checkpoint / rewind / re-lex (完了)
 - [x] Session 1: 型式コア (1.1-1.4 完了)
-- [ ] Session 2: mapped / tuple / template / predicate / infer (2.1 mapped・2.2 tuple・2.5 infer(1.3 で完了扱い) 済み / 残り 2.3 template・2.4 predicate)
+- [ ] Session 2: mapped / tuple / template / predicate / infer (2.1 mapped・2.2 tuple・2.3 template・2.5 infer(1.3 で完了扱い) 済み / 残り 2.4 predicate)
 - [x] Session 3: 3.3 は先取りで完了 / 3.1・3.2 はスキップ (2026-09-20 判断)
 - [ ] Session 4 (縮小): 4.1 だけ流し読み。4.2-4.4 はスキップ
 - [ ] Session 5: as / satisfies / `!` / instantiation / arrow 曖昧性

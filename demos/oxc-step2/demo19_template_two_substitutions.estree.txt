@@ -1,0 +1,76 @@
+TS-ESTree AST:
+{
+  "type": "Program",
+  "body": [
+    {
+      "type": "TSTypeAliasDeclaration",
+      "id": {
+        "type": "Identifier",
+        "decorators": [],
+        "name": "A",
+        "optional": false,
+        "typeAnnotation": null,
+        "start": 5,
+        "end": 6
+      },
+      "typeParameters": null,
+      "typeAnnotation": {
+        "type": "TSTemplateLiteralType",
+        "quasis": [
+          {
+            "type": "TemplateElement",
+            "value": {
+              "raw": "a",
+              "cooked": "a"
+            },
+            "tail": false,
+            "start": 9,
+            "end": 13
+          },
+          {
+            "type": "TemplateElement",
+            "value": {
+              "raw": "b",
+              "cooked": "b"
+            },
+            "tail": false,
+            "start": 19,
+            "end": 23
+          },
+          {
+            "type": "TemplateElement",
+            "value": {
+              "raw": "c",
+              "cooked": "c"
+            },
+            "tail": true,
+            "start": 29,
+            "end": 32
+          }
+        ],
+        "types": [
+          {
+            "type": "TSStringKeyword",
+            "start": 13,
+            "end": 19
+          },
+          {
+            "type": "TSNumberKeyword",
+            "start": 23,
+            "end": 29
+          }
+        ],
+        "start": 9,
+        "end": 32
+      },
+      "declare": false,
+      "start": 0,
+      "end": 33
+    }
+  ],
+  "sourceType": "script",
+  "hashbang": null,
+  "start": 0,
+  "end": 34
+}
+Parsed Successfully.

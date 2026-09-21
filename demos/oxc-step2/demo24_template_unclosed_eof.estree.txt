@@ -1,0 +1,16 @@
+TS-ESTree AST:
+{
+  "type": "Program",
+  "body": [],
+  "sourceType": "script",
+  "hashbang": null,
+  "start": 0,
+  "end": 0
+}
+
+  x Expected `}` but found `EOF`
+   ,----
+ 1 | type A = `a${string
+   `----
+
+Parsed with Errors.

@@ -1,4 +1,4 @@
-# oxc Session 2 デモ: タプル型の要素の並び順検査
+# oxc Session 2 デモ: タプル型 (2.2) とテンプレートリテラル型 (2.3)
 
 [reading-oxc-ts.md](../../docs/reading-oxc-ts.md) Session 2.2 / `parse_tuple_type` (types.rs:967) の
 実証。各 `demoN_*.ts` の隣の `.estree.txt` が AST ダンプ (エラー時は診断メッセージ)。
@@ -112,3 +112,41 @@ tsc が黙って union に畳んで受け入れる。理由は `createNormalized
 
 `[...string[], ...number[]]` の `["a", "b", 1, 2]` のように、どこまでが最初の rest でどこからが
 次の rest かが型から決まらないので、位置 (`t[3]`)・`length`・代入可否が定まらない。
+
+---
+
+# テンプレートリテラル型 (2.3): `parse_template_type` (types.rs:762)
+
+各 `demoN_*.ts` の隣に `.estree.txt` (AST / 診断) と `.tokens.txt` (レキサーが最終的に出したトークン列。
+`tokens_dump` で採取。エラーで止まるデモは `.tokens.txt` が空になるので置いていない)。
+
+## AST の形: `quasis` (文字列の部分) と `types` (`${}` の中の型)
+
+`quasis` は `types` より必ず1つ多く、交互に並ぶ (先頭・末尾が `${` / `}` で始まる・終わる場合も空文字列の要素が入る)。
+
+| デモ | 入力 | AST |
+|---|---|---|
+| demo18 | `` `abc` `` | `TSLiteralType` (中に `TemplateLiteral`)。`${}` が無いので `TSTemplateLiteralType` にはならない |
+| demo19 | `` `a${string}b${number}c` `` | quasis `["a","b","c"]`、types `[string, number]` |
+| demo20 | `` `${string}` `` | quasis `["",""]`、types `[string]` (両端が空文字列) |
+| demo21 | `` `${T}.${U}` `` (`T`, `U` は型パラメータ) | quasis `["",".",""]`、types `[TSTypeReference, TSTypeReference]` (ソースの doc コメントの例) |
+| demo23 | `` `${"a" | "b"}-${number}` `` | types の1つ目が `TSUnionType`。`${}` の中は `parse_ts_type` なので任意の型が書ける |
+
+## レキサーとの連携: `}` の再読 (`re_lex_template_substitution_tail`)
+
+`.tokens.txt` は、再読した後の最終的なトークン列。
+
+| デモ | 中身 |
+|---|---|
+| demo18 | `NoSubstitutionTemplate` 1 トークンのみ。再読は起きない |
+| demo19 | `TemplateHead` → `string` → `TemplateMiddle` → `number` → `TemplateTail`。`}b${` と `}c` `` ` `` は、`}` (RCurly) として読まれたあと再読されて Middle / Tail になった |
+| demo22 | 入れ子 `` `a${`b${string}c`}d` ``: Head(`a${`) Head(`b${`) `string` Tail(`}c` `` ` ``) Tail(`}d` `` ` ``)。内側の `parse_template_type` が再帰して内側の Tail を作り、戻ってきた外側が次の `}` を再読して Tail にする。入れ子の深さを数えるコードは無い (再帰がそのまま対応を取る) |
+
+AST は demo22: quasis `["a","d"]`、types `[Tpl{quasis:["b","c"], types:[string]}]`。
+
+## 閉じ忘れ
+
+| デモ | 入力 | 結果 |
+|---|---|---|
+| demo24 | `` type A = `a${string `` (ファイル終端で終わる) | `Expected `}` but found `EOF`` (`Kind::Eof` の腕の `expect(TemplateTail)` に当たっているはず。中の呼び出しまでは追っていない) |
+| demo25 | `` type A = `a${string; `` (`;` が来る) | `Unexpected token` (`;` の位置)。`;` は型として読めない |

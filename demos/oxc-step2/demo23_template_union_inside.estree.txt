@@ -1,0 +1,102 @@
+TS-ESTree AST:
+{
+  "type": "Program",
+  "body": [
+    {
+      "type": "TSTypeAliasDeclaration",
+      "id": {
+        "type": "Identifier",
+        "decorators": [],
+        "name": "A",
+        "optional": false,
+        "typeAnnotation": null,
+        "start": 5,
+        "end": 6
+      },
+      "typeParameters": null,
+      "typeAnnotation": {
+        "type": "TSTemplateLiteralType",
+        "quasis": [
+          {
+            "type": "TemplateElement",
+            "value": {
+              "raw": "",
+              "cooked": ""
+            },
+            "tail": false,
+            "start": 9,
+            "end": 12
+          },
+          {
+            "type": "TemplateElement",
+            "value": {
+              "raw": "-",
+              "cooked": "-"
+            },
+            "tail": false,
+            "start": 21,
+            "end": 25
+          },
+          {
+            "type": "TemplateElement",
+            "value": {
+              "raw": "",
+              "cooked": ""
+            },
+            "tail": true,
+            "start": 31,
+            "end": 33
+          }
+        ],
+        "types": [
+          {
+            "type": "TSUnionType",
+            "types": [
+              {
+                "type": "TSLiteralType",
+                "literal": {
+                  "type": "Literal",
+                  "value": "a",
+                  "raw": "\"a\"",
+                  "start": 12,
+                  "end": 15
+                },
+                "start": 12,
+                "end": 15
+              },
+              {
+                "type": "TSLiteralType",
+                "literal": {
+                  "type": "Literal",
+                  "value": "b",
+                  "raw": "\"b\"",
+                  "start": 18,
+                  "end": 21
+                },
+                "start": 18,
+                "end": 21
+              }
+            ],
+            "start": 12,
+            "end": 21
+          },
+          {
+            "type": "TSNumberKeyword",
+            "start": 25,
+            "end": 31
+          }
+        ],
+        "start": 9,
+        "end": 33
+      },
+      "declare": false,
+      "start": 0,
+      "end": 34
+    }
+  ],
+  "sourceType": "script",
+  "hashbang": null,
+  "start": 0,
+  "end": 35
+}
+Parsed Successfully.
