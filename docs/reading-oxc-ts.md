@@ -68,7 +68,7 @@ parse_ts_type                          types.rs:15   … conditional は最上�
 **式パーサーとの対比が一番の学び**: 型は演算子が少ないので階層を関数で固定した素朴な再帰下降。
 自作 Pratt と読み比べる。
 
-## Session 2: 型の難所たち — `ts/types.rs` 後半 (~3h)
+## Session 2: 型の難所たち — `ts/types.rs` 後半 (~3h) ✅ 完了
 
 行番号はガイド作成時のもの (数行ズレあり、関数名で grep)。
 
@@ -89,9 +89,14 @@ parse_ts_type                          types.rs:15   … conditional は最上�
       連携の正体は `}` の再読 (`re_lex_template_substitution_tail`、`<` の re-lex とは別の使い方)。
       文字列部分 (`parse_template_element`) は式と共有。AST は1つで JS と TS のノードが混ざる、
       JS だけのモードは `is_ts` フラグ (54か所)。デモは demos/oxc-step2 の demo18-25。メモ参照
-- [ ] 2.4 `parse_type_or_type_predicate` (~1341) + asserts (~815) —
+- [x] 2.4 `parse_type_or_type_predicate` (~1341) + asserts (~815) —
       `x is string` / `asserts x is string`。戻り値型の位置だけで許される文法。
-      `parse_return_type` (1329) は Session 1.2 の関数型から呼ばれていた部品
+      `parse_return_type` (1329) は Session 1.2 の関数型から呼ばれていた部品。
+      `parse_type_predicate_prefix` は `peek_token` の1トークン先読みで、名前になれるか / 次が `is` か /
+      同じ行かの3段階の絞り込み。`Kind::Asserts` の腕は述語か型名かを分け、戻り値以外の位置の述語は
+      パーサーが受け入れて後段 (tsc はチェッカー、oxc は `oxc_semantic`) が TS1228 で弾く住み分け。
+      `x is T` も `asserts x is T` も同じ `TSTypePredicate` の `asserts` の true/false。
+      `oxc_semantic` の役割と crate の歴史 (リンターの設計の一部として作られた) もメモ参照
 - [x] 2.5 `parse_infer_type` (~324) — `infer T extends U` の constraint と
       conditional の `extends` の衝突回避 (~350)。**1.3 で完了扱い**
       (`parse_constraint_of_infer_type` の4分岐を demos/oxc-step1 の demo12-15 で全網羅済み)
@@ -178,7 +183,7 @@ Session 3 の 3.1 (`parse_signature_member`) は分岐するだけの部品、3.
 
 - [x] Session 0: checkpoint / rewind / re-lex (完了)
 - [x] Session 1: 型式コア (1.1-1.4 完了)
-- [ ] Session 2: mapped / tuple / template / predicate / infer (2.1 mapped・2.2 tuple・2.3 template・2.5 infer(1.3 で完了扱い) 済み / 残り 2.4 predicate)
+- [x] Session 2: mapped / tuple / template / predicate / infer (2.5 は 1.3 で完了扱い)
 - [x] Session 3: 3.3 は先取りで完了 / 3.1・3.2 はスキップ (2026-09-20 判断)
 - [ ] Session 4 (縮小): 4.1 だけ流し読み。4.2-4.4 はスキップ
 - [ ] Session 5: as / satisfies / `!` / instantiation / arrow 曖昧性

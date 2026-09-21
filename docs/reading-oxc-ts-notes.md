@@ -1516,12 +1516,234 @@ is_ts: source_type.is_typescript(),      // SourceType (oxc_span) が拡張子�
 埋まっている) の仕組みそのもので、`is_ts` の分岐がその入口になっている。JSDoc の型 (`T?` / `T!`) を
 どのモードで読んでいるかは未確認。
 
+### 2.4 読み始め: 型述語 (`x is T` / `asserts x is T` / `this is T`)
+
+構文の意味 (知識ベース。tsc のソースでは確認していない)。**戻り値の型の位置に書く**型ガード関連の構文:
+
+```ts
+// ① 型述語: `true` を返したなら x は string
+function isString(x: unknown): x is string { return typeof x === "string"; }
+if (isString(v)) { v; /* string に絞られる */ }
+
+// ② アサーション関数: 例外が飛ばずに戻ってきたなら、その後ずっと x は string
+function assertIsString(x: unknown): asserts x is string { if (typeof x !== "string") throw new Error(); }
+assertIsString(v); v; /* string */
+function assert(cond: unknown): asserts cond { }     // `is` を付けない形もある
+
+// ③ this 型述語: メソッドが this (呼び出した対象自身) の型を絞る
+class FileEntry { isDirectory(): this is DirectoryEntry { ... } }
+```
+
+`if` で判定する ① と、呼び出した後ずっと絞る ② の違い。`asserts` と `is` は予約語ではないソフトキーワード
+(`string.Foo` の話と同じ)。だから `parse_non_array_type` の `Kind::Asserts` の腕
+([types.rs:492](../../../oxc-project/oxc/crates/oxc_parser/src/ts/types.rs#L492)) は、`asserts` の次が識別子で
+同じ行に続くときだけ述語として読み、そうでなければ普通の型名として読む。
+
+関数の位置 (oxc rev `1aa5ec11ce`): `parse_return_type` (:1329、呼び出しは `:56` 関数型の `=>` の後と
+`:1325` `:` の後の2か所)、`parse_type_or_type_predicate` (:1334)、`parse_type_predicate_prefix` (:1355)、
+`parse_asserts_type_predicate` (:800)、`parse_this_type_predicate` (:723、入口は `Kind::This` の腕)。
+
+#### `parse_type_predicate_prefix` (types.rs:1355) — 先読みは `peek_token` の1トークンだけ、3段階の絞り込み
+
+doc コメントの意味: 「型述語の `<識別子> is` または `this is` の前置部分をパースする。現在のトークンの後ろに、
+同じ行で `is` が続いていない場合は、**何も消費せずに** `None` を返す」。
+
+```rust
+fn parse_type_predicate_prefix(&mut self) -> Option<TSTypePredicateName<'a>> {
+    if !self.cur_kind().is_identifier_name() { return None; }          // ① 今のトークンが名前になれるか
+    let next = self.lexer.peek_token();                                  // ② 次のトークンを覗く (消費しない)
+    if next.kind() != Kind::Is || next.is_on_new_line() { return None; } // ③ `is` で、かつ同じ行か
+    // ここに来たら述語確定: 名前 (this なら this) を読み、`is` を食べる
+}
+```
+
+- **先読みの道具は `self.lexer.peek_token()`**。次のトークンを1つ覗くだけで位置は動かない。
+  `lookahead` (checkpoint → 巻き戻し) を使う `is_start_of_mapped_type` (最大4トークン) や
+  `is_next_token_colon_or_question_colon` (3トークン) より軽い。1トークンで済むのは、`x is T` の `x` と `is` の間に
+  何も入らないから
+- **呼び出し側 `parse_type_or_type_predicate`** (:1334): `None` なら普通の型として `parse_ts_type()` を呼ぶだけ。
+  `Some` なら `x is` の後の型を `parse_ts_type()` で読み、`TSTypePredicate` で包む
+- **「同じ行で」**: `asserts` の腕の「次が識別子で改行なし」と同じ考え方。`is` が次の行から始まるなら
+  述語とは見なさない
+
+**①は実際に入る**: 戻り値の型が名前になれないトークンで始まるとき (oxc で5つとも成功を確認):
+
+```ts
+declare function f(x: unknown): { a: number };        // `{`
+declare function f(x: unknown): [string, number];     // `[`
+declare function f(x: unknown): "a" | "b";            // 文字列リテラル
+declare function f(x: unknown): (y: number) => void;  // `(`
+```
+
+**①は「早めに落とす」だけでなく、②③だけでは誤判定する場合を防ぐ**:
+
+```ts
+type is = number;
+declare function f(x: unknown): [is];   // `is` という名前の型をタプルに入れた形
+```
+
+`[is]` は、今のトークンが `[`、次が `is` で、②③だけを見ると `x is` の形に見える。①で `[` が名前になれないと
+先に `None` になるので、普通の型として読まれる (oxc で成功)。①が無いと `[` を名前として読もうとして壊れる。
+`string` のようなキーワード型は `is_identifier_name` を通る (キーワードも名前の一種として数える) ので①では
+落ちず、③で「次が `is` でない」ことで `None` になる。
+
+| 段階 | 落とすもの | 例 |
+|---|---|---|
+| ① 名前になれるか | 名前になれない記号やリテラルで始まる型 | `{...}` `[...]` `"a"` `(...)` |
+| ② 次を覗く | (覗くだけ) | — |
+| ③ `is` かつ同じ行か | 名前の後ろに `is` が来ない普通の型 | `string` `Foo` `T[]` |
+
+#### `new_ts_type_predicate` — 3つの構文を1種類のノードで表す (`asserts` の true / false)
+
+`TSType::new_ts_type_predicate(span, parameter_name, asserts, type_annotation, self)` は、型述語のノード
+`TSTypePredicate` を作って `TSType` として返す**自動生成のビルダー関数** (`oxc_ast/src/generated/ast_builder.rs:21920`)。
+ロジックは持たず、AST のノードを組み立てるだけ。`new_ts_template_literal_type` や
+`new_ts_named_tuple_member` と同じ `new_ts_*` の一種。
+
+ノード `TSTypePredicate` (`oxc_ast/src/ast/ts.rs:1191`) の3フィールドで、3つの構文を全部表せる:
+
+| フィールド | `x is string` | `asserts x is string` | `asserts cond` |
+|---|---|---|---|
+| `parameter_name` | `x` | `x` | `cond` |
+| `asserts` | `false` | `true` | `true` |
+| `type_annotation` | `Some(string)` | `Some(string)` | `None` (`is` が無い) |
+
+呼び出し元との対応: `parse_type_or_type_predicate` (:1338) は `asserts` を `false` 固定、
+`parse_asserts_type_predicate` (:800) は `true` で、`type_annotation` は `eat(Is)` が成功したときだけ `Some`
+(`asserts cond` の形が `None` になる部分)。
+
+つまり `x is T` も `asserts x is T` も、**別々のノード型ではなく同じ `TSTypePredicate` の `asserts` の
+true / false で区別している**。
+
+#### `parse_non_array_type` の `Kind::Asserts` の腕 (types.rs:492) — 述語か型名か、そして TS1228 の住み分け
+
+```rust
+Kind::Asserts => {
+    let next = self.lexer.peek_token();                                  // `asserts` の次を覗く
+    if next.kind().is_identifier_name() && !next.is_on_new_line() {
+        self.bump_any();                                                  // `asserts` を食べる
+        self.parse_asserts_type_predicate(asserts_start)                 // → 述語
+    } else {
+        self.parse_type_reference()                                       // → 普通の型名 `asserts`
+    }
+}
+```
+
+判定は「次のトークンが名前になれて、かつ同じ行か」の1トークン先読み (`peek_token`)。6つの入力で oxc の AST を実測:
+
+| 入力 | oxc の AST |
+|---|---|
+| `(x: unknown): asserts x is string` | `TSTypePredicate(asserts=true)` |
+| `(x: unknown): asserts x` | `TSTypePredicate(asserts=true)` (`is` なし。`type_annotation` は `None`) |
+| `(this: unknown): asserts this is string` | `TSTypePredicate(asserts=true)` (`this` も名前になれる) |
+| `type asserts = number; (): asserts` | `TSTypeReference(asserts)` (次が名前でない) |
+| `type asserts = number; let a: asserts;` | `TSTypeReference(asserts)` |
+| `let a: asserts x;` | `TSTypePredicate(asserts=true)` (**戻り値の位置でなくても述語として読む**) |
+
+`asserts` という名前の型 (`type asserts = number`) が書けるのは、`asserts` がソフトキーワードだから。
+
+**最後の行 (`let a: asserts x;`) の検査は住み分けの例**: この分岐は `parse_non_array_type` にあるので、戻り値の位置以外でも
+述語として読まれる。**パーサーはエラーにしない**が、次の段階が弾く:
+
+| | 誰が出すか | 場所 |
+|---|---|---|
+| tsc | チェッカー | `checker.ts:41283` (TS1228 `A type predicate is only allowed in return type position...`) |
+| oxc | **`oxc_semantic`** | `checker/typescript.rs:43` `check_ts_type_predicate`、診断は `diagnostics.rs:285` `type_predicate_only_in_return_type` |
+
+`oxc_semantic` の例 (`cargo run -p oxc_semantic --example semantic -- x.ts`) で `let a: asserts x;` を走らせると
+TS(1228) が出ることを確認。`oxc_parser` の例だけでは出ない。**訂正**: 最初「oxc は tsc と違ってエラーにしない」と
+説明したが、`oxc_parser` の例だけを走らせた結果で、`oxc_semantic` まで見ると tsc と同じ住み分け
+(パーサーは受け入れ、後段が報告) で、後段が別の crate なだけだった。TS1338 (`infer` の位置、1.3) と同じ形。
+
+#### `parse_this_type_predicate` (:723) / `parse_asserts_type_predicate` (:800) — トークンを消費して `new_ts_type_predicate` を呼ぶだけ
+
+面白いところはほぼ無い。判定のロジックは呼び出し側 (`parse_non_array_type` の `This` / `Asserts` の腕) に集まっている。
+強いて言えば3点:
+
+- **`this is T` は、`this` を先に食べてから `is` を見る** (`asserts` は `peek_token` で覗いてから食べるのと逆の順序)。
+  `this` は必ず `TSThisType` として作るので、食べた後でも使い回せる (述語に包むか、そのまま返すかだけが違う)
+  ため、と思われる (推測)
+- **`parse_this_type_predicate` は `asserts` が `false` 固定、`type_annotation` は必ず `Some`**。`this is T` には
+  `is` が必ずあるので `Option` にする必要がない
+- **`parse_asserts_type_predicate` の `if self.eat(Kind::Is)`** は `asserts x` (`is` 無し) の形を受け付けるための任意の `is`。
+  `type_annotation` が `None` になる部分
+
+2.4 の中身は、`parse_type_predicate_prefix` (1トークン先読みの3段階の絞り込み) と `Kind::Asserts` の腕
+(述語か型名か、TS1228 の住み分け) に尽きる。
+
+#### `oxc_semantic` とは — パーサーの次の段階 (と、oxc は「パーサー」ではなくツールチェーン)
+
+```
+ソース → [oxc_parser] → AST → [oxc_semantic] → スコープ / シンボル情報 + 追加のエラー
+                                    ↓
+                        linter / transformer などがそれを使う
+```
+
+`oxc_semantic` の README: 「JS / TS の AST に対する包括的な意味解析」。主な仕事はスコープ解析 (スコープの木)、
+シンボル解決 (宣言した名前 = `BindingIdentifier` に `symbol_id` を付ける。ast の doc コメントの「semantic 解析の
+bind ステップで初期化」はこれ)、参照の追跡 (使う側 `IdentifierReference` がどの宣言を指すか)、任意で制御フロー、
+JSDoc・モジュール解析。
+
+**エラーを出す仕事もある**: `src/checker/` (`javascript.rs` 1,362 行、`typescript.rs` 343 行) が、パーサーが出さない
+構文位置のエラーを木を見て報告する。`with_check_syntax_error(true)` で有効。TS1228 (型述語は戻り値の位置だけ) や
+TS1338 (`infer` の位置、1.3) はここが出す。1.3 の「ローカルに閉じる検査はパーサー、木全体が要る検査は
+(tsc ではチェッカー、oxc では) `oxc_semantic`」の後段はこの crate。**型は解決しない**
+(型の解決は別 crate の `oxc_type_checker`、実験的で約 2,300 行。tuple の正規化なども無い)。
+
+**oxc はツールチェーン全体** (`crates/`、`src` の行数 / 最初に追加された日、git 履歴で確認):
+
+| crate | 役割 | 行数 | 最初の追加 |
+|---|---|---|---|
+| `oxc_parser` | ソース → AST | 約2.4万 | 2023-02-11 |
+| `oxc_semantic` | スコープ / シンボル + 構文位置の検査 | 約1.1万 | 2023-02-25 10:20 |
+| `oxc_linter` | リンター (oxlint) | 約45.7万 | 2023-02-25 10:48 (`linter prototype`) |
+| `oxc_minifier` | ミニファイア | 約4.8万 | 2023-03-29 |
+| `oxc_formatter` | フォーマッタ | 約5.3万 | 2023-05-07 (`oxc_printer` から改名) |
+| `oxc_transformer` | 変換 (TS → JS など) | 約3.1万 | 2023-09-16 |
+| `oxc_codegen` | AST → ソース出力 | 約0.8万 | 2023-10-12 |
+| `oxc_type_checker` | 型チェッカー (実験的) | 約0.2万 | 2026-07-01 |
+
+- **`oxc_semantic` は「oxlint が出てから追加」ではない**: リポジトリ開始 (2023-02-09) の2週間後、リンターの試作の
+  **28分前**に同じ作者が作っている。最初の利用者はリンター (下の根拠)。書いた人の意図までは履歴からは断定できない
+- **リンター試作の最初のコミット (`c86cca37a8`) の根拠** (`git show` で確認): `oxc_linter` の `Cargo.toml` に最初から
+  `oxc_semantic` への依存があり、コードが `use oxc_semantic::SemanticBuilder;` と
+  `SemanticBuilder::new().build(program)` を呼んでいる。さらに `crates/{oxc_semantic/src => oxc_linter}/Cargo.toml`
+  というリネームを含み、`oxc_semantic` の中にあったファイルを `oxc_linter` の雛形として流用している。
+  semantic の最初のコミット (`5f7a756229`) は依存が `oxc_ast` だけの単独 crate だった
+- **`checker/` (構文位置の検査) は最初リンターにあった**: 2023-04-10 の
+  `refactor(linter,semantic): move syntax check from linter to semantic (#272)` で semantic に移された。
+  TS1228 のような検査が semantic にあるのはこの移動の結果。**PR #272 の本文 (`gh pr view 272`)**:
+  「構文チェッカーは意味解析の一部で、意味エラーのためだけにユーザーがリンターを足すのは筋が通らない」
+  (原文: `Syntax checker is part of semantic analyzer, it doesn't make sense for the user to add a linter
+  just for semantic errors`)。semantic を作った理由ではなく、**構文チェックを移した理由**
+- **PR #46・#48 の本文は空 (意図は書かれていない)**: `oxc_semantic` を作った PR #46 (2023-02-25 02:29Z、3分でマージ) と
+  `oxc_linter` の試作の PR #48 (同日 08:48Z、8分でマージ) は、作者が出した本文が空の PR
+- **意図は issue・discussion で確認できた (`gh` で読んだ)**: semantic は**リンターの設計の一部として作られた**。
+  - **discussion #38「RFC: Linter」** (2023-02-23、semantic ができる2日前、作者 Boshen): リンターの実装方針。
+    優先事項は「performance, simplicity and contribution friendly」。走査のアルゴリズムに「AST ごとに visiting pass を
+    して、親を指す木 (indextree、ノードは untyped) を作り、**semantic analysis としてスコープ木・シンボルテーブル・
+    制御フローグラフを作る**。そのあと lint ルールごとに `par_iter`」とある。ルールの trait は
+    `fn run(&self, node: &AstNode, ctx: &Semantic)` で、「`Semantic` 構造体は AST に紐づくすべて (スコープ、シンボル、
+    CFG、trivia など) を包む」という節もある
+  - **issue #41「Umbrella: Linter MVP」** (2023-02-24): 「決定は discussion #38 に基づく」と明記し、作業リストに
+    **PR #46 (semantic builder)** が入っている
+  - PR #46 のタイトルの「untyped ast tree creation」は、RFC の「親を指す木、ノードは untyped」と一致
+  - 時系列: 02-23 RFC → 02-24 Umbrella issue (PR #46 を含む) → 02-25 PR #46 (semantic) と #48 (linter 試作) をマージ
+- **oxlint のリリース時期** (リポジトリのタグと `gh api repos/oxc-project/oxc/releases` で確認): 2023-02 に構想・試作 →
+  `oxlint_v0.0.3` (2023-06-27)・`v0.0.4` (06-28)・`v0.0.5` / `v0.0.6` (07-01) が最初期の `oxlint_v*` タグ →
+  **`oxlint_v1.0.0` は 2025-06-10** (構想から約2年4か月)。「2025年リリース」は v1.0.0 のこと。
+  `oxlint_v0.0.3` より前のタグ (v0.0.1・v0.0.2 など) が `oxlint` という名前だったかは未確認。一般公開の告知の日は
+  リポジトリの外 (ブログ・SNS) の話なので未確認
+- `oxc_linter` が桁違いに大きい (45万行) のは、ルールを1つずつ実装しているから、というのは推測
+
+LT の骨格 (地図の図) に `oxc_semantic` の行を足すと、冒頭の問い「oxc は TS をどこまで検査している?」にも答えられる。
+
 ## 進捗
 
 - [x] Session 0: checkpoint / rewind / re-lex
 - [x] Session 1: 型式コア (1.1 parse_ts_type / 1.2 関数型 / 1.3 union・intersection・前置演算子・infer /
       1.4 postfix・non_array_type 完了。次は Session 2)
-- [ ] Session 2: 型の難所 (2.1 mapped type・2.2 tuple・2.3 template 完了。次は 2.4 `parse_type_or_type_predicate`)
+- [ ] Session 2: 型の難所 (Session 2 完了: 2.1 mapped・2.2 tuple・2.3 template・2.4 predicate・2.5 infer(1.3 で完了扱い)。次は Session 5)
 - [ ] Session 3: signature member / try_parse_type_arguments
 - [ ] Session 4: ts/statement.rs + modifiers.rs
 - [ ] Session 5: JS 式への食い込み
