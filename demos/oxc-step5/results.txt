@@ -1,0 +1,80 @@
+typescript 6.0.3 
+
+## demo1_issue_case.ts: 1 + 1 as number / 2;
+  ① tsc の出力         : (1 + 1) / 2;   → 値 1
+  ② 空白で消しただけ   : 1 + 1           / 2;   → 値 1.5   ★食い違う
+  tsc erasableSyntaxOnly の診断: なし
+  ③ oxc                : エラー (位置 16 の `/` で止まる)
+
+## demo2_add_mul.ts: 1 + 1 as number * 2;
+  ① tsc の出力         : (1 + 1) * 2;   → 値 4
+  ② 空白で消しただけ   : 1 + 1           * 2;   → 値 3   ★食い違う
+  tsc erasableSyntaxOnly の診断: なし
+  ③ oxc                : エラー (位置 16 の `*` で止まる)
+
+## demo3_no_problem_top.ts: 1 as number * 2;
+  ① tsc の出力         : 1 * 2;   → 値 2
+  ② 空白で消しただけ   : 1           * 2;   → 値 2   (一致)
+  tsc erasableSyntaxOnly の診断: なし
+  ③ oxc                : OK (エラーなし)
+
+## demo4_lower_after.ts: 1 * 1 as number + 2;
+  ① tsc の出力         : 1 * 1 + 2;   → 値 3
+  ② 空白で消しただけ   : 1 * 1           + 2;   → 値 3   (一致)
+  tsc erasableSyntaxOnly の診断: なし
+  ③ oxc                : OK (エラーなし)
+
+## demo5_chained.ts: 1 + 1 as any as number * 2;
+  ① tsc の出力         : (1 + 1) * 2;   → 値 4
+  ② 空白で消しただけ   : 1 + 1                  * 2;   → 値 3   ★食い違う
+  tsc erasableSyntaxOnly の診断: なし
+  ③ oxc                : エラー (位置 23 の `*` で止まる)
+
+## demo6_shift.ts: 1 >> 1 as number + 2;
+  ① tsc の出力         : (1 >> 1) + 2;   → 値 2
+  ② 空白で消しただけ   : 1 >> 1           + 2;   → 値 0   ★食い違う
+  tsc erasableSyntaxOnly の診断: なし
+  ③ oxc                : エラー (位置 17 の `+` で止まる)
+
+## demo7_parenthesized.ts: (1 + 1 as number) * 2;
+  ① tsc の出力         : (1 + 1) * 2;   → 値 4
+  ② 空白で消しただけ   : (1 + 1          ) * 2;   → 値 4   (一致)
+  tsc erasableSyntaxOnly の診断: なし
+  ③ oxc                : OK (エラーなし)
+
+## demo8_lower_op.ts: 1 + 1 as number === 2;
+  ① tsc の出力         : 1 + 1 === 2;   → 値 true
+  ② 空白で消しただけ   : 1 + 1           === 2;   → 値 true   (一致)
+  tsc erasableSyntaxOnly の診断: なし
+  ③ oxc                : OK (エラーなし)
+
+## demo9_satisfies.ts: 1 + 1 satisfies number * 2;
+  ① tsc の出力         : (1 + 1) * 2;   → 値 4
+  ② 空白で消しただけ   : 1 + 1                  * 2;   → 値 3   ★食い違う
+  tsc erasableSyntaxOnly の診断: なし
+  ③ oxc                : エラー (位置 23 の `*` で止まる)
+
+## demo10_before_low_op.ts: 10 - 2 as number - 3;
+  ① tsc の出力         : 10 - 2 - 3;   → 値 5
+  ② 空白で消しただけ   : 10 - 2           - 3;   → 値 5   (一致)
+  tsc erasableSyntaxOnly の診断: なし
+  ③ oxc                : OK (エラーなし)
+
+## demo11_fix_paren_left.ts: (1 + 1) as number / 2;
+  ① tsc の出力         : (1 + 1) / 2;   → 値 1
+  ② 空白で消しただけ   : (1 + 1)           / 2;   → 値 1   (一致)
+  tsc erasableSyntaxOnly の診断: なし
+  ③ oxc                : OK (エラーなし)
+
+## demo12_fix_paren_whole.ts: (1 + 1 as number) / 2;
+  ① tsc の出力         : (1 + 1) / 2;   → 値 1
+  ② 空白で消しただけ   : (1 + 1          ) / 2;   → 値 1   (一致)
+  tsc erasableSyntaxOnly の診断: なし
+  ③ oxc                : OK (エラーなし)
+
+## demo13_fix_paren_operand.ts: 1 + (1 as number) / 2;
+  ① tsc の出力         : 1 + 1 / 2;   → 値 1.5
+  ② 空白で消しただけ   : 1 + (1          ) / 2;   → 値 1.5   (一致)
+  tsc erasableSyntaxOnly の診断: なし
+  ③ oxc                : OK (エラーなし)
+

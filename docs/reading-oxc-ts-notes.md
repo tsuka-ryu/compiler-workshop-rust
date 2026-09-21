@@ -736,6 +736,10 @@ LT では触れずにブログ側へ回す。トリビアのタイトル案:
 | 14 | AST は1つで JS と TS が混ざる | `TSLiteralType` の中に JS の `TemplateLiteral` が入る。`--estree` はその1つの木を書き出しただけ | 2.3 の節の「AST は1つ」 |
 | 15 | tsc の移植の上に足された近道 | `at_start_of_ts_declaration` の高速経路は tsc・ts-go に無い。同じ判定を2か所に書き写し「exactly 一致」とコメントで保証 (`is_start_of_type` の2重管理・`<` の早期リターンも同種) | 4.1 の節の「高速経路」 |
 | 16 | `class A extends B<string> {}` は `<string>` が2回読まれる | 式側の投機が `{` で失敗して rewind し、`try_parse_type_arguments` で読み直す (改行や `implements` が続くと成功する) | 3.3 見直しの節、demos/oxc-step3 の demo6・11・12 |
+| 17 | `1 + 1 as number / 2` の `as` は思ったより優先順位が低い | 型を消すだけの除去ツールと意味が食い違う問題 (TypeScript#63527) → ts-go#4192 (Anders) → oxc#22986 (Boshen) が ts-go のマージから約16時間で追従。「`as` の優先順位がこんなに低いとは」と驚く人が多数 | 5.1 の節 |
+| 18 | 式は Pratt、型は階層を関数で固定した再帰下降 | `parse_binary_expression_rest` (演算子が多い) と `parse_union_type_or_higher` → ... (演算子が `\|` `&` 程度)。自作の Pratt と並べられる | 5.1 の節 |
+| 19 | `as` の優先順位が低いという知られざる仕様を、7.0 で意図的に breaking change にした | 「We shipped *what* precedence??」(Ryan) と TS チーム自身が驚き、ランタイム動作を変えないよう「優先順位の変更」ではなく「エラーにする」を選んだ。top1000 で試して影響を確認する方針 (#63527) | 5.1 の節 |
+| 20 | `as` の右辺が式ではなく型だから `/ 2` を飲み込めない | 優先順位が低いだけでは説明できない。右辺が型 (`parse_ts_type`) なので、後ろの `/` を外側のループが `(1 + 1) as number` 全体の左辺として読む | 5.1 の節 |
 
 書き方の方針案: 1 項目 = 入力 1 行 + 結果 (tsc と oxc の出力) + 1〜2 段落。デモは `demos/` から
 そのまま引用できる。**未確認だった事項** (H の `namespace string {}` のデモなど) は、書く前にデモで確認する。
@@ -1942,6 +1946,207 @@ oxc が必要とした理由は、コメントの「`lookahead` のコスト」�
 「`<` でなければ checkpoint の前に抜ける」早期リターン (3.3)、`parse_type_predicate_prefix` の `peek_token`
 (1トークン先読みは `lookahead` より軽い、2.4)。「oxc は速さのために、tsc の移植の上に1段の近道や2重管理を足している」
 というブログのトリビア候補 (下の表に追加)。
+
+### 5.1 `as` / `satisfies` (`js/expression.rs:1322` `parse_binary_expression_rest`) — Pratt の腕と、2026-06 に足された「消せない」判定
+
+**`parse_binary_expression_rest` は oxc の Pratt パーサーの本体** (コメントに matklad の Pratt 解説記事へのリンク)。
+`rest` は「左辺を読んだ後の続き」の意味で、`parse_member_expression_rest` (後置の続き) と同じ命名。
+呼び出し元 `parse_binary_expression_or_higher` (:1304) が左辺を1つ読んで (`#x in o` の特別扱いもここ)、この関数に渡す。
+
+```rust
+loop {
+    let kind = self.re_lex_right_angle();                                 // `>=` `>>` の結合もここ
+    let Some(left_precedence) = kind_to_precedence(kind) else { break };  // 二項演算子でなければ終了
+    let stop = if 右結合 { left < min } else { left <= min };              // 優先順位が低ければ止まる
+    if stop { break; }
+    if matches!(kind, Kind::As | Kind::Satisfies) { ...; continue; }      // ★ as / satisfies
+    self.bump_any();                                                        // 演算子を食べる
+    let rhs = self.parse_binary_expression_or_higher(left_precedence);     // 右辺を再帰で読む
+    lhs = new_binary_expression(lhs, op, rhs);                              // lhs を包み直す
+}
+```
+
+**自作 (`src/js/parser.rs:291` `parse_binary_expression(min_bp)`) との対比**: 考え方は同じ (優先順位を引数で持ち回る再帰)。
+自作は `binary_binding_power(kind)` が返す結合力の組 `(l_bp, r_bp)` で左右結合を表し、oxc は `Precedence` の値1つ +
+`is_right_associative()` で `<` と `<=` を切り替える。oxc は二項演算子の表 (`kind_to_precedence`) に `as` / `satisfies` (TS) や
+`in` も載せている。**式は Pratt、型は階層を関数で固定した再帰下降** (演算子が `|` `&` 程度で少ない) という対比が、
+1.1 のメモの「式パーサーとの対比が一番の学び」の実物。
+
+**`as` / `satisfies` の腕**: 右辺を再帰で読む代わりに、`parse_ts_type()` を呼ぶ。**`types.rs` に入る3つ目の入口**
+(1つ目: 後置 `!` / `<` = `parse_member_expression_rest`、2つ目: 文の `at_start_of_ts_declaration`)。
+
+```rust
+if matches!(kind, Kind::As | Kind::Satisfies) {
+    if self.cur_token().is_on_new_line() { break; }          // 改行があれば止める (ASI: `var x = foo⏎as (Bar)`)
+    self.bump_any();
+    let type_annotation = self.parse_ts_type();              // ★ 右側は式ではなく型
+    lhs = new_ts_as_expression / new_ts_satisfies_expression(span, lhs, type_annotation);
+    // ... 「消せない」判定 (下) ...
+    continue;
+}
+```
+
+- `.js` でも構文としては読む。`if !self.is_ts { self.error(as_in_ts(span)) }` でエラーを出すだけで、`parse_member_expression_rest` の
+  `!` / `<` (`if self.is_ts` で腕自体を分ける) とは作りが違う
+- 改行の扱い (`is_on_new_line()` で `break`) は tsc 5.9 と同じ (コメントも同じ)
+
+**「消せない」判定 (`last_operand_precedence`)**: 2026-06 に足された新しい挙動。
+
+```rust
+let mut last_operand_precedence: Option<Precedence> = None;   // 今の左辺を作った二項演算子の優先順位 (最初は None)
+...
+// as / satisfies の腕の最後:
+if let Some(last_precedence) = last_operand_precedence
+    && let Some(next_precedence) = kind_to_precedence(self.re_lex_right_angle())
+    && next_precedence > last_precedence
+{ break; }
+```
+
+コメントの訳: 「`a ## b as T` または `a ## b satisfies T` (`##` は何かの二項演算子) のとき、`##` より優先順位が高い演算子が
+後ろに続いたら、そこでパースを止める。続けてしまうと、`as` や `satisfies` を消したときに式の意味が変わり、消せなくなるから」。
+変数のコメントの訳: 「今の左辺のオペランドを作った演算子の優先順位。消せない `as` / `satisfies` を見つけるために使う。二項・論理演算子を
+1つも消費していない間は `None` (TypeScript では最初のオペランドは単項式のパースから来るので二項式にならない)」。
+
+```ts
+1 + 1 as number * 2      // 続けて読むと ((1 + 1) as number) * 2 = 4。`as number` を消すと 1 + 1 * 2 = 3 で意味が変わる
+```
+
+| 式 | 結果 |
+|---|---|
+| `1 as number * 2` | OK |
+| `1 * 1 as number + 2` | OK (`+` は `*` より強くない) |
+| `1 + 1 as number * 2` | **エラー** (`*` が `+` より強い。`* 2` が宙に浮いてパースエラーになる) |
+| `1 + 1 as any as number * 2` | **エラー** (連鎖では追跡している優先順位を**更新しない**ので、元の `+` と比べ続ける) |
+| `1 >> 1 as number + 2` | **エラー** |
+| `(1 + 1 as number) * 2` | OK |
+| `1 + 1 as number === 2` | OK (`===` は `as` より低い) |
+
+比べる相手は「`as` の直前の二項演算子 (`##`)」であって、`as` 自体ではない。`as` / `satisfies` の腕は `last_operand_precedence` を
+書き換えず `continue` するので連鎖でも元の演算子が残る (書き換えるのは普通の二項演算子の腕だけ)。
+
+**どういう場合にバグっていたか (`demos/oxc-step5`、実測)**: TS のパース自体は正しく、問題は「型を空白に置き換えるだけの素朴な除去」
+と `erasableSyntaxOnly` の間にあった。`1 + 1 as number / 2` を tsc は `(1 + 1) / 2` (値1) と読むが、`as number` を空白にすると
+`1 + 1 / 2` (値1.5) になり、tsc 6.0.3 の `erasableSyntaxOnly` はそれをエラーにしなかった。10ケースの実測で、
+**「空白で消すと値が食い違う」5件 (`+` の後に `/` `*`、`>>` の後に `+`、連鎖、`satisfies`) と「oxc がエラーにする」5件が完全に一致**し、
+「後ろの演算子が直前と同じか弱い」ケース (`1 * 1 as number + 2`、`10 - 2 as number - 3`) は消しても値が変わらず oxc も通す。
+
+**なぜ `/ 2` が `(1 + 1)` 全体にかかるのか (`1 + 1 as number / 2`)**: ① `as` は `+` より弱いので、`1 + 1` を読むとき `+` の右辺は
+`as` の手前で止まり、`1 + 1` が先に1つのかたまりになる。② 普通の弱い演算子なら右辺は**式**なので、右辺を読む再帰が後ろの
+`/ 2` を飲み込む (`1 + 1 < 3 / 2` は `(1+1) < (3/2)`)。でも **`as` の右辺は式ではなく型** (`parse_ts_type()`) で、型のパーサーは
+`/` を読めず `number` で止まる。`/ 2` を受け止める再帰が無いので、外側のループが `(1 + 1) as number` **全体を左辺として** `/` を
+消費する (木は `/ (as (+ 1 1) number) 2`)。③ `(1 + 1) / 2` の括弧は**出力のときに** tsc が木の形を保つために補うもので、
+パースで付くのではない。素朴な空白除去は木ではなく文字列を見るので括弧が無いまま `1 + 1 / 2` になり、別の木になる。
+「優先順位が低い」だけだと `/ 2` が `number` の側に入りそうに見えるが、**右辺が型なので入れない**のが核心
+(コードの動きから整理したもので、tsc の実際の木を出して確かめたわけではない)。
+
+**修正は breaking change (パースエラーにする)。互換性は承知の上**: 修正後の ts-go 7.x と oxc では `1 + 1 as number / 2` が
+**パースエラー** (`erasableSyntaxOnly` を付けなくてもエラー。oxc は普通の `.ts` としてエラーになることを実測)。
+tsc 5.9 / 6.0.3 (JS 版) は変わらずエラーにならない。issue #63527 の議論 (原文の要点):
+
+- **Ryan Cavanaugh** (2026-06-02): 「We shipped *what* precedence??」と驚き、「`1 || 2 ?? 3` がエラーなのと同じ扱いにできないか」
+  「Strada (旧 JS 版) で **top1000 に対して試して**、**7.0 でここを break するだけ**でいいか確かめる価値がある」
+  「**ランタイムの動作 (emit) を変えたくない**ので、単なる優先順位の変更ではなく**エラーにする**必要がある」
+- **Anders Hejlsberg** (2026-06-03): 「`xxx as T` の後ろに意味のある形で続けられるのは、関係演算子と同じか低い演算子だけ。
+  高い演算子が続くと `as number` を消せなくなるので、その演算子を式の一部とみなすのは筋が通らない」
+  「演算子を見つけたらパースを止める PR を出す。**現実のコードで壊れるものがあったら、とても驚く**」
+- **ts-go#4192 のコメント**: Jake Bailey が「top800 (人気リポジトリ800個) を回すのを待つのか」と質問、Anders は
+  「ts-go 側のコードベースで試したい」と答え、`@typescript-bot test this` を実行 (CI の結果までは読んでいない)
+
+つまり、優先順位を変えて意味を変える (既存コードの emit が変わって危ない) より、**エラーにして書き手に括弧を付けさせる**ほうを
+選んだ意図的な breaking change で、影響は小さい見込み (実際のコードで `a + b as T * c` と書く人はほとんどいない)。
+TypeScript は 6.0 まで (JS 版) と 7.0 から (ts-go) でメジャーバージョンが分かれていて、「in 7.0」は **メジャーの切り替わりで
+こういう小さな breaking change を入れる**意味だと思われる (私の読みで、公式方針の記述は確認していない)。oxc は ts-go に合わせて
+エラーにしているので、**tsc 6.0 では通っていたコードが oxc ではエラー**になりうる。
+
+**実装での表現: 変数の3か所 (宣言・代入・判定)** (`js/expression.rs`)。`1 + 1 as number / 2` で値を追う:
+
+| 行 | コード | 役割 |
+|---|---|---|
+| `:1336` | `let mut last_operand_precedence: Option<Precedence> = None;` | 宣言。ループに入る前は `None` |
+| `:1441` | `last_operand_precedence = Some(left_precedence);` | 代入。**普通の二項演算子の腕の最後**で、その演算子の優先順位を入れる |
+| `:1384-1389` | `if let Some(last) = last_operand_precedence && let Some(next) = kind_to_precedence(self.re_lex_right_angle()) && next > last { break; }` | 判定。**`as` / `satisfies` の腕の最後**で、後ろの演算子と比べる |
+
+| 周 | 今のトークン | 何が起きるか | `lhs` | `last_operand_precedence` |
+|---|---|---|---|---|
+| 0 | — | 宣言 | `1` | `None` |
+| 1 | `+` | 普通の二項演算子の腕。右辺 `1` を読んで包み、腕の最後で代入 | `1 + 1` | `Some(Add)` |
+| 2 | `as` | `as` の腕。`number` (型) を読んで包む → 判定へ | `(1 + 1) as number` | `Some(Add)` のまま (`as` の腕は書き換えない) |
+| 判定 | `/` | `Multiply > Add` が真 → `break` | — | — |
+
+`break` でループを抜けて `(1 + 1) as number` を返し、`/ 2` は読まれずに残る。呼び出し元をたどって文の読み込み
+(`parse_expression_statement`) に戻ると、文の終わり (`;`) のはずなのに `/` が来るので `Expected a semicolon or an implicit
+semicolon after a statement, but found ...` になる (oxc の実測で、キャレットが `/` を指す)。**エラーを出す専用のコードは無く、
+「`/ 2` を読まずに返す」だけで自然に出る** (oxc#22986 の本文「後ろの演算子を宙に浮かせてパースエラーとして表に出す」)。
+
+判定の3部品: ① `last_operand_precedence` が `None` (`as` の前に二項演算子が無い、`1 as number * 2`) なら判定しない
+② `re_lex_right_angle()` を通すのは `>=` `>>` を結合して見るため (二項演算子でなければ `None` で判定しない)
+③ 「以上」ではなく**「より強い」**なので、同じ強さ (`10 - 2 as number - 3`) は通る。連鎖 `1 + 1 as any as number * 2` は
+`as` の腕が書き換えないので、何回 `as` を挟んでも元の `+` と比べ続けて止まる。
+
+**直し方は「括弧を付けて意図を明示させる」** (`demos/oxc-step5` の demo11-13、実測)。元の `1 + 1 as number / 2` は
+`(1 + 1) / 2` と `1 + (1 / 2)` のどちらの意味か曖昧なので、パーサーが黙って1つに決めるのをやめ、エラーにして書き手に選ばせる:
+
+| 書きたい意味 | 書き方 | tsc の出力 (値) | 空白で消した値 | oxc |
+|---|---|---|---|---|
+| `(1 + 1) / 2` (=1) | `(1 + 1) as number / 2` (demo11) | `(1 + 1) / 2` (1) | 1 一致 | OK |
+| 同上 | `(1 + 1 as number) / 2` (demo12) | `(1 + 1) / 2` (1) | 1 一致 | OK |
+| `1 + (1 / 2)` (=1.5) | `1 + (1 as number) / 2` (demo13) | `1 + 1 / 2` (1.5) | 1.5 一致 | OK |
+
+3通りとも空白で消しても tsc の意味と一致し、oxc も通る。`(1 + 1) as number / 2` (demo11) が通るのは、`(1 + 1)` が括弧付きの
+1つの式として単項の位置で読まれ、ループの中で二項演算子を消費していないので `last_operand_precedence` が `None` のまま判定されないから。
+既存コードは括弧を付ければ直り、意味は「今まで tsc が出力していた JS と同じ」に保てる (自動で直すことも機械的にできそう、と思う)。
+
+**TS チームが選ばなかった案** (議論の原文の要点から。私の読み):
+
+| 案 | 扱い |
+|---|---|
+| `1 + 1 as (number / 2)` と読む (`as` の右辺を広げて型のパースエラーにする) | 優先順位そのものを変える案 |
+| `1 \|\| 2 ?? 3` のように、混ぜるとエラーにする (`??` と同じ扱い) | **こちらに近い形で採用**。`||` / `&&` と `??` を括弧なしで混ぜるとエラーになるのと同じ発想を `as` にも入れた |
+| 優先順位を変える | 既存コードのランタイム動作 (emit) が変わるので選ばなかった |
+
+「曖昧なものをパーサーが黙って1つに決めるのをやめて、書き手に意図を書かせる」方向の変更。
+
+**由来 (実物で確認)**:
+
+| 版 | `as` / `satisfies` の腕 |
+|---|---|
+| tsc 5.9 (classic、`parser.ts` `parseBinaryExpressionRest`) | `as` を読んで `leftOperand` を包み直すだけ。後続の演算子の優先順位を見ない。改行のコメントも oxc と同じ |
+| **ts-go 7.1-dev** (`parser.go:4642`) | `lastOperand` を追跡し、後続が `lastPrecedence` より強ければ `break`。コメントに issue #63527 の URL |
+| oxc | `last_operand_precedence` で同じ考え方 (`None` は ts-go の `OperatorPrecedenceHighest`: 二項式でなければ何も止めない) |
+
+**経緯 (`gh` で確認)**:
+
+1. **microsoft/TypeScript#63527** (2026-06-02、robpalme): `erasableSyntaxOnly` が `console.log(1 + 1 as number / 2)` でエラーを出さない。
+   型を空白に置き換えるだけの素朴な除去 (ts-blank-space など) だと `console.log(1 + 1           / 2)` = `1 + (1/2)` になり、
+   TS 自身の出力 `(1 + 1) / 2` と意味が食い違う。ts-blank-space・SWC・Amaro は先に修正済み
+2. **議論**: Ryan Cavanaugh は「`as` は2文字だから括弧を差し込める、では不十分。空白化して文字位置が保たれる構文だけを許す」。
+   Anders Hejlsberg (2026-06-03): 「`as` / `satisfies` は関係演算子と同じ優先順位で、後ろに続けられるのは同じか低い演算子だけ。
+   高い優先順位の演算子が続くなら、それを式の一部として解釈するのをやめる」。コメントでは「`as` の優先順位がこんなに低いとは
+   思わなかった」「どこにも書いていない」と驚く人が複数いた
+3. **microsoft/typescript-go#4192** (Anders、2026-06-03 18:49 → 06-04 21:14 マージ): 修正
+4. **oxc-project/oxc#22986** (Boshen、2026-06-05 12:38 → 13:15 マージ。ts-go のマージから約16時間後): 本文が「Port of microsoft/typescript-go#4192」。
+   `parse_binary_expression_rest` と `tasks/coverage/misc/` のテスト4つ (`ts-unerasable-as.ts` など) とスナップショット
+5. **microsoft/TypeScript#63661** (2026-07-20、magic-akari): `**` の間に `as` が挟まるケース (TypeScript 7.0.2 で確認) は別件。
+   oxc が追従したかは未確認
+
+**今日の他の発見と逆向き**: 4.1 の高速経路は「tsc に無い oxc 独自の最適化」だったが、これは **tsc (ts-go) の仕様変更を oxc が
+追いかけている**例。tsc 5.9 の移植の上に、2026-06 の修正が足されている。
+
+**追従の速さ (`gh` で実測、UTC)**: ts-go#4192 を出す 06-03 18:49 → **ts-go のマージ 06-04 21:14** → **oxc#22986 を出す 06-05 12:38
+(ts-go のマージから約15時間後)** → **oxc のマージ 06-05 13:15 (出してから37分後、ts-go のマージから約16時間後)**。
+以前ここに「3日」と書いたのは ts-go の PR を出した日から数えていて不正確。マージからは1日以内。
+
+- 修正が小さい: oxc#22986 は **+118 −11、コミット1つ、10ファイル**。ただし内訳はテスト4ファイル
+  (`tasks/coverage/misc/fail|pass/ts-unerasable-*.ts` など) とスナップショット5ファイルが大半で、パーサー本体
+  (`expression.rs`) の変更は小さい。ts-go#4192 は +925 −7 (6ファイル) だが、パース部分は `lastOperand` の追跡と `break` の数行で、
+  残りはテストと基準ファイルだと思う (推測)
+- 移植先の構造が同じ: oxc の `parse_binary_expression_rest` は tsc の `parseBinaryExpressionRest` の移植で、腕の形が1:1に近い
+  (コードを比べて確認)
+- 追っているのは今回だけではない: 同じ時期の oxc に typescript-go 由来の PR が並ぶ (`#22845` TS1183、`#23999` conformance suite、
+  `#24102` 以降の `oxc_type_checker` の PR など)。ただし本文に「Port of ... typescript-go」と書いた PR は検索で4件
+- 作者 (Boshen) が oxc の中心的な作者で、同日にほかの PR も出していそう (推測)
+- 判断も速い: リリースやバグ報告を待たず、ts-go のマージの翌日に取り込んでいる。tsc の実装を oxc のコードの隣に
+  そのまま並べて保つ設計 (コメントアウトで tsc の原文を残す等、1.3 の「移植とは何を捨てるかの選択」) と整合する
 
 ## 進捗
 

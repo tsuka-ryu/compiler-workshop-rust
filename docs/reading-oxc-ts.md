@@ -146,8 +146,14 @@ parse_ts_type                          types.rs:15   … conditional は最上�
 
 `js/expression.rs` の中の TS を拾い読みする回。一番むずかしくて一番おいしい。
 
-- [ ] 5.1 `as` / `satisfies` (~1322-1370) — バイナリ式ループ内での処理、
-      優先順位違反 (`a + b as T` の再結合) のコメント
+- [x] 5.1 `as` / `satisfies` (~1322-1370) — バイナリ式ループ内での処理、
+      優先順位違反 (`a + b as T` の再結合) のコメント。
+      `parse_binary_expression_rest` は oxc の Pratt パーサーの本体 (自作の Pratt と対比)。`as` の腕は右辺が式ではなく
+      型 (`parse_ts_type`) で、`types.rs` に入る3つ目の入口。`satisfies` は同じ腕 (作るノードとエラーだけ違う)。
+      **`last_operand_precedence` の「消せない」判定**は 2026-06 の修正 (TypeScript#63527 → ts-go#4192 → oxc#22986、
+      ts-go のマージから約16時間で追従): `1 + 1 as number / 2` を空白で消すと値が変わる問題を、パースエラーにして
+      括弧を付けさせる意図的な breaking change (7.0)。10+3ケースの実測で「食い違う」5件と「oxc がエラー」5件が一致。
+      デモは demos/oxc-step5。メモ参照
 - [ ] 5.2 postfix `!` (TSNonNullExpression, ~896 → 現 915) — optional chain との絡み (`a?.b!`)
 - [ ] 5.3 `<T>expr` 型アサーション (~1235/1257) — .ts のみ (.tsx では JSX と衝突)
 - [ ] 5.4 `TSInstantiationExpression` (~770/1020/1122 → 現 920-935 で一部確認済み) —
