@@ -160,9 +160,11 @@ parse_ts_type                          types.rs:15   … conditional は最上�
       `OptionalChain` フラグで表す。`parse_lhs_expression_or_higher_impl` の `map_to_chain_expression` の `TSNonNullExpression` の腕が橋渡し。
       `.js` では `!` を後置として読まない。`parse_lhs_expression_or_higher_impl` の `(` / `?.` ガードは PR #23063 の近道 (約13%高速化)。
       デモは demos/oxc-step5b。メモ参照
-- [ ] 5.3 `<T>expr` 型アサーション (~1235/1257) — .ts のみ (.tsx では JSX と衝突)。
-      入口は demo10 のトレース (demos/oxc-step3) で確認済み: 式の先頭の `<` はアロー関数を先に試し、失敗したら `parse_ts_type_assertion`。
-      (2026-09-21 にいったんスキップにしたが、やはり読むことにした)
+- [x] 5.3 `<T>expr` 型アサーション (~1235/1257) — .ts のみ (.tsx では JSX と衝突)。
+      式の優先順位のはしごの全体 (assignment → binary(Pratt) → unary → update → lhs → primary) を整理。型アサーションは UpdateExpression の
+      すぐ上の段 (単項式の1種) で、`<` で始まる式は `.ts` = 型アサーション / `.tsx`・`.jsx` = JSX / `.js` = エラーの3通りに振り分けられる
+      (分岐の軸は `is_ts` ではなく `is_jsx()`)。JSX 以外だけ採用する腕のガードと、`parse_update_expression` の肯定形との表裏の2重管理、
+      `parse_simple_unary_expression` との書き方の不揃い。JSX は専用の `jsx/mod.rs` (中身は読んでいない)。メモ参照
 - ~~5.4 `TSInstantiationExpression` (~770/1020/1122 → 現 920-935 で一部確認済み)~~ — スキップ (2026-09-21)。
   `parse_member_expression_rest` の `<` の腕、失敗時の `<<` 書き戻し (demo13)、class の `extends` との絡み (demo6・11・12) は
   demos/oxc-step3 で確認済み。`error_if_unparenthesized_instantiation_expression` は読んでいない
@@ -213,5 +215,5 @@ Session 3 の 3.1 (`parse_signature_member`) は分岐するだけの部品、3.
 - [x] Session 2: mapped / tuple / template / predicate / infer (2.5 は 1.3 で完了扱い)
 - [x] Session 3: 3.3 は先取り + 見直し (2026-09-21、demos/oxc-step3) で完了 / 3.1・3.2 はスキップ (2026-09-20 判断)
 - [x] Session 4 (縮小): 4.1 は呼び出し元と高速経路まで読んだ (2026-09-21)。4.2・4.4 はスキップ
-- [ ] Session 5: 5.1 as/satisfies・5.2 `!` は完了、5.4 はスキップ (トレースで入口は確認済み)、残りは 5.3 `<T>expr` と 5.5 arrow 曖昧性
+- [ ] Session 5: 5.1 as/satisfies・5.2 `!`・5.3 `<T>expr` は完了、5.4 はスキップ (トレースで入口は確認済み)、残りは 5.5 arrow 曖昧性
 - [x] Session 6: 丸ごとスキップ (2026-09-20 判断)

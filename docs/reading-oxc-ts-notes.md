@@ -2247,6 +2247,62 @@ PR コメントに「`(` / `?.` のガードは経験則ではなく仕様に忠
   `SyntaxError: Invalid tagged template on optional chain` を実測)。読まずに「予期しないトークン」で止めるより分かりやすいメッセージを出せるから、
   と思われる (推測)。仕様で禁止の理由は確認していない
 
+### 5.3 読み始め: 式の優先順位のはしごの全体と、`<` で始まる式の3通りの入口
+
+**`UpdateExpression` は `++` / `--` のついた式** (ES の仕様の名前。`++a` 前置、`a--` 後置。演算子が付かないふつうの式も1種)。
+式の優先順位のはしごの途中の1段で、これまでのトレースに毎回出ていた。**式のはしごの全体** (`js/expression.rs`):
+
+```
+parse_assignment_expression_or_higher   (:1479  代入 `=` 、アロー関数を先に試す)
+  └ parse_binary_expression_or_higher   (:1304  二項演算 `+` `as` ... → 中の parse_binary_expression_rest が Pratt)
+      └ parse_unary_expression_or_higher  (:1252 あたり  単項 `!` `-` `typeof` `await` と、型アサーション `<T>x`)
+          └ parse_update_expression       (:1206  `++` `--` と、JSX の要素)
+              └ parse_lhs_expression_or_higher   (:748  左辺式 `f(x)` `a.b` `a?.b!` ...)
+                  └ parse_primary_expression     (:228  `f` `1` `"s"` ...)
+```
+
+型の側の階層 (`parse_ts_type` → union → intersection → type_operator → postfix → non_array_type) と並べられる。**式は Pratt +
+このはしご、型は階層を関数で固定した再帰下降**。
+
+**型アサーション `<T>expr` は、UpdateExpression のすぐ上の段** (`parse_unary_expression_or_higher` の `Kind::LAngle` の腕)。仕様上は
+「単項式の1種」(`!x` や `typeof x` と同じ格の前置形) で、`<T>` の後ろには単項式が続く。だから `<T>x++` は `<T>(x++)`、
+`<T>a + b` は `(<T>a) + b` と読まれる (コードからの読みで、走らせて確かめてはいない)。
+
+**`<` で始まる式は、ファイルの種類で3通りに振り分けられる**:
+
+| ファイル | `<` が来たとき | 読むところ |
+|---|---|---|
+| `.ts` (JSX なし、`is_ts`) | 型アサーション | `parse_unary_expression_or_higher` の `Kind::LAngle if !self.source_type.is_jsx()` → `parse_ts_type_assertion` |
+| `.tsx` / `.jsx` (`is_jsx()`) | JSX の要素 (`<div>...`) | 上の腕には入らず、`parse_update_expression` の `if self.source_type.is_jsx() && self.at(Kind::LAngle)` → `parse_jsx_expression` |
+| `.js` (TS でも JSX でもない) | エラー | `parse_jsx_in_non_jsx_error` (JSX が無効なのに `<`) |
+
+`.tsx` で `<T>x` を書けないのは、`<` が JSX として読まれて型アサーションの腕に入れないから。分岐の軸は **`is_ts` ではなく `is_jsx()`**
+(`SourceType` の別々の軸)。`parse_simple_unary_expression` (`:1272`、`<T>expr` の後ろや前置演算子の右辺が呼ぶ) は似た関数だが、
+`<` のとき **JSX を先に判定する** (`is_jsx()` → JSX、`is_ts` → 型アサーション、それ以外 → エラー) 順が違う。
+
+#### 5.3 のコメントの訳と、`<` の腕の書き方の不揃い、JSX の行き先
+
+`parse_unary_expression_or_higher` の `Kind::LAngle if !self.source_type.is_jsx()` の腕のコメントの訳:
+「TS の型アサーション。`UnaryExpression` の変形で `< 型 > UnaryExpression` の形 (例: `<T>x`)。JSX でも TS でもないファイルでは、先頭の `<` は代わりに
+『JSX が無効なのに JSX』のエラーになる (例: `<div/>`)。(JSX のファイルの `<` はここでは合致しない。`UpdateExpression` の腕に落ちて、そこで JSX の要素として
+読まれる)」。
+
+- **判定はここ (ガード) で行っている**: 「JSX のファイルか」はこの腕のガード `!is_jsx()` で見ていて、落とすのは **JSX を読む処理**だけ (最初「判定はここでは
+  行わず」と説明したが誤り)。この腕は「JSX **以外**のときだけ採用する腕」。同じ判定が `parse_update_expression` の
+  `if self.source_type.is_jsx() && self.at(Kind::LAngle)` (肯定形) にもあり、否定形と肯定形の表裏の2重管理 (`at_start_of_ts_declaration` の高速経路と `worker`、
+  `is_start_of_type` と同種)
+- **書き方が不揃い**: 同じ「`<` で始まる」場面を、`parse_unary_expression_or_higher` (:1256) は**ガードで JSX を除外して次の段に落とす**、
+  `parse_simple_unary_expression` (:1275) は**ガードなしで腕の中で `is_jsx()` を見て `parse_jsx_expression` を呼ぶ**。動きは同じ。なぜ違うかはコードから
+  分からない (推測: 後者は `parse_update_expression` へ落とす前に JSX を見る必要がある別の入口。`git blame` は未確認)
+- **腕の `kind if kind.is_unary_operator() => ...`** は match guard。`kind` は何にでもマッチして値を束縛する名前で、`if` の条件が真のときだけ採用する。
+  単項演算子の集合 (`Minus | Plus | Bang | Tilde | Typeof | Void | Delete`、`lexer/kind.rs:360`) を1つの関数にまとめてガードで呼ぶ書き方。腕は上から試されるので
+  この腕が単項演算子を先に捕まえ、その下の `Kind::LAngle if ...`、`Kind::Await`、最後の `_` (UpdateExpression) は残りを受ける
+- **JSX は専用の `jsx/mod.rs` (582行) が処理する、もう1つの独立した再帰下降パーサー**。入口は `parse_jsx_expression` (`jsx/mod.rs:25`) で、呼び出し元は
+  `js/expression.rs:1224` (`parse_update_expression`)・`:1277` (`parse_simple_unary_expression`)・`jsx/mod.rs:495` (JSX の中の入れ子)。`<` を食べて、次が `>` なら
+  フラグメント (`parse_jsx_fragment`)、名前なら要素 (`parse_jsx_element`) の1トークン先読みの分岐。`parse_jsx_opening_element` の中に `try_parse_type_arguments` の
+  呼び出し (`.tsx` の `<Comp<string> />`、4か所の1つ)。レキサー側にも `lexer/jsx.rs` (147行) の `next_jsx_child` (子の文字列)・
+  `continue_lex_jsx_identifier` (`<my-component>` のハイフン。パーサーの要請で読み直す re-lex の仲間) がある。JSX の中身は読んでいない
+
 ## 進捗
 
 - [x] Session 0: checkpoint / rewind / re-lex
@@ -2256,6 +2312,6 @@ PR コメントに「`(` / `?.` のガードは経験則ではなく仕様に忠
 - [x] Session 3: 3.3 (型引数) は先取り + 見直し (2026-09-21、demos/oxc-step3 の呼び出し順トレース) で完了。
       3.1・3.2 はスキップ
 - [x] Session 4 (縮小): 4.1 は呼び出し元と高速経路まで読んだ (2026-09-21)。4.2・4.4 はスキップ
-- [ ] Session 5: JS 式への食い込み (5.1 as/satisfies・5.2 `!` は完了、5.4 はスキップ、残りは 5.3 `<T>expr` と 5.5 arrow 曖昧性)。
+- [ ] Session 5: JS 式への食い込み (5.1 as/satisfies・5.2 `!`・5.3 `<T>expr` は完了、5.4 はスキップ、残りは 5.5 arrow 曖昧性)。
       `!` と instantiation は `parse_member_expression_rest` の `match` の腕として見えている
 - [x] Session 6: 丸ごとスキップ
