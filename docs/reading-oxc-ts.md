@@ -142,7 +142,7 @@ parse_ts_type                          types.rs:15   … conditional は最上�
   (1.2 の `abstract` peek 判定・3.3 の `<T>` 判定と同じ手筋の繰り返しなので新規性が薄い)
 - ~~4.4 `modifiers.rs` (`try_parse_modifier` の投機パターン)~~ — skip (同上)
 
-## Session 5: JS 式パーサーへの食い込み — 曖昧性の最前線 (~3h)
+## Session 5: JS 式パーサーへの食い込み — 曖昧性の最前線 (~3h) ✅ 完了
 
 `js/expression.rs` の中の TS を拾い読みする回。一番むずかしくて一番おいしい。
 
@@ -168,9 +168,14 @@ parse_ts_type                          types.rs:15   … conditional は最上�
 - ~~5.4 `TSInstantiationExpression` (~770/1020/1122 → 現 920-935 で一部確認済み)~~ — スキップ (2026-09-21)。
   `parse_member_expression_rest` の `<` の腕、失敗時の `<<` 書き戻し (demo13)、class の `extends` との絡み (demo6・11・12) は
   demos/oxc-step3 で確認済み。`error_if_unparenthesized_instantiation_expression` は読んでいない
-- [ ] 5.5 `js/arrow.rs:18` `try_parse_parenthesized_arrow_function_expression` —
+- [x] 5.5 `js/arrow.rs:18` `try_parse_parenthesized_arrow_function_expression` —
       アロー曖昧性の TS 版。唯一 `checkpoint_with_error_recovery` を使う場所 (365)。
-      カバー文法 (tsc/仕様) との対比はメモの「曖昧性への対処は3階層」参照
+      カバー文法 (tsc/仕様) との対比はメモの「曖昧性への対処は3階層」参照。
+      **アローは JS だけでも曖昧** (`(a, b)` が式にも引数にもなる)。acorn はカバー文法で「式として読んで引数に読み替える」、oxc は投機パース
+      (引数として読んで外れたら巻き戻す)。`Tristate` (True/False/Maybe) の判定 (`(` の次の数トークン): TS の型注釈 (`(a:` `(a?:`) は
+      式に書けない形なのでアローと確定でき、投機に回るのは `(a)` `(a, b)` `(a = 1)` `([x])` など型注釈の無い形だけ。判定は tsc の逐語訳
+      (`_worker` の名前も tsc 由来)。`checkpoint_with_error_recovery` は普通の `checkpoint` とエラーの保存のしかた (`Count` と `Full`) だけが違う。
+      三項の真側で `:` が戻り値型と取り違えられる長いコメントを demos/oxc-step5c (8ケース、注釈付きトレース) で実測。読んでいない所: `<` の腕・`async`。メモ参照
 
 **回収済みの問い**: `a < b > c` は .ts で `(a < b) > c` (demo2 で実証済み)。
 
@@ -215,5 +220,5 @@ Session 3 の 3.1 (`parse_signature_member`) は分岐するだけの部品、3.
 - [x] Session 2: mapped / tuple / template / predicate / infer (2.5 は 1.3 で完了扱い)
 - [x] Session 3: 3.3 は先取り + 見直し (2026-09-21、demos/oxc-step3) で完了 / 3.1・3.2 はスキップ (2026-09-20 判断)
 - [x] Session 4 (縮小): 4.1 は呼び出し元と高速経路まで読んだ (2026-09-21)。4.2・4.4 はスキップ
-- [ ] Session 5: 5.1 as/satisfies・5.2 `!`・5.3 `<T>expr` は完了、5.4 はスキップ (トレースで入口は確認済み)、残りは 5.5 arrow 曖昧性
+- [x] Session 5: 5.1 as/satisfies・5.2 `!`・5.3 `<T>expr`・5.5 arrow 曖昧性は完了、5.4 はスキップ (トレースで入口は確認済み)
 - [x] Session 6: 丸ごとスキップ (2026-09-20 判断)

@@ -1,0 +1,34 @@
+typescript 6.0.3 
+
+## demo1_arrow_in_true_side.ts: "x ? y => ({ y }) : z => ({ z });"
+   oxc : Cond(x, Arrow([y]) => Paren({..}), Arrow([z]) => Paren({..}))
+   tsc : Cond(x, Arrow([y]) => Paren({..}), Arrow([z]) => Paren({..}))
+
+## demo2_return_type_then_colon.ts: "a ? (x): string => x : null;"
+   oxc : Cond(a, Arrow([x], ret=string) => x, null)
+   tsc : Cond(a, Arrow([x], ret=string) => x, null)
+
+## demo3_typed_params_true.ts: "a() ? (b: number, c?: string): void => d() : e;"
+   oxc : Cond(Call(a), Arrow([b,c], ret=void) => Call(d), e)
+   tsc : Cond(Call(a), Arrow([b,c], ret=void) => Call(d), e)
+
+## demo4_paren_expr_only.ts: "a ? (b) : c;"
+   oxc : Cond(a, Paren(b), c)
+   tsc : Cond(a, Paren(b), c)
+
+## demo5_arrow_in_false_side.ts: "a ? b : (c) => d;"
+   oxc : Cond(a, b, Arrow([c]) => d)
+   tsc : Cond(a, b, Arrow([c]) => d)
+
+## demo6_paren_then_arrow_in_false.ts: "a ? (b) : c => d;"
+   oxc : Cond(a, Paren(b), Arrow([c]) => d)
+   tsc : Cond(a, Paren(b), Arrow([c]) => d)
+
+## demo7_return_type_alone.ts: "(x): string => x;"
+   oxc : Arrow([x], ret=string) => x
+   tsc : Arrow([x], ret=string) => x
+
+## demo8_destructure_true_side.ts: "a ? ({ y }) : z;"
+   oxc : Cond(a, Paren({..}), z)
+   tsc : Cond(a, Paren({..}), z)
+

@@ -2303,6 +2303,179 @@ parse_assignment_expression_or_higher   (:1479  代入 `=` 、アロー関数を
   呼び出し (`.tsx` の `<Comp<string> />`、4か所の1つ)。レキサー側にも `lexer/jsx.rs` (147行) の `next_jsx_child` (子の文字列)・
   `continue_lex_jsx_identifier` (`<my-component>` のハイフン。パーサーの要請で読み直す re-lex の仲間) がある。JSX の中身は読んでいない
 
+### 5.5 読み始め: アロー関数は JS だけでも曖昧 — カバー文法 (acorn) と投機パース (oxc) の違い
+
+**JS だけでの曖昧さ**: `(` で始まった時点では、括弧式か、アロー関数の引数リストか決められない。`=>` が出るまで分からず、しかも括弧の中身が長くなり得る。
+
+```js
+(a, b)          // 括弧で囲んだ式 (カンマ式)      (a, b) => a + b  // アロー関数の引数
+({ a, b })      // 括弧式 (オブジェクトリテラル)    ({ a, b }) => a  // アロー: 分割代入の引数
+(a = 1, b = 2)  // 括弧式 (代入式のカンマ列)        (a = 1, b = 2) => a  // アロー: デフォルト値付き
+```
+
+**TS が加わるとカバー文法が使いにくい**: 引数に型注釈が付く (`(a: number, b: string): boolean => ...`)。括弧式として読み進めると
+`(a: number` の `:` が式として読めない (三項演算子の `:` と紛らわしい)。tsc は先読みで見当を付けて (`Tristate`) 必要なら投機する方式で、
+oxc はそれを写している。
+
+**acorn (カバー文法の代表的な実装) との比較** (ローカルの `~/ghq/github.com/acornjs/acorn`、`3f40dbe` 2026-04-08、
+`acorn/src/expression.js:618` `parseParenAndDistinguishExpression`、約65行):
+
+```js
+this.next()                                                      // `(` を食べる
+let refDestructuringErrors = new DestructuringErrors            // ① 「もし引数だったら不正な形」を記録する入れ物
+while (this.type !== tt.parenR) {
+  exprList.push(this.parseMaybeAssign(false, refDestructuringErrors, this.parseParenItem))   // ② 括弧の中身をまず「式」として読む
+}
+this.expect(tt.parenR)
+if (canBeArrow && this.shouldParseArrow(exprList) && this.eat(tt.arrow)) {   // ③ `=>` が来たか
+  this.checkPatternErrors(refDestructuringErrors, false)         // ④ 引数として不正な形がなかったかを、後から検査
+  return this.parseParenArrowList(startPos, startLoc, exprList, forInit)   // ⑤ 式のリストを引数に「読み替える」(toAssignableList など、lval.js:11 toAssignable)
+}
+...                                                              // ⑥ `=>` が来なければ、そのまま括弧式 (カンマ式)
+```
+
+| 段階 | **acorn (カバー文法)** | **oxc (投機パース)** |
+|---|---|---|
+| `(` に着いた | そのまま**式として**読み進める | **先読み** (`is_parenthesized_arrow_function_expression`) で見当を付ける (`Tristate`) |
+| 括弧の中身 | 式として読む (`parseMaybeAssign`)。緩い読み方 | `Maybe` なら checkpoint を取り、**引数として**読んでみる (`parse_parenthesized_arrow_function_head`) |
+| 当たり | **式のリストを引数に読み替える** (`toAssignable*`) | そのまま確定 |
+| 外れ | そのまま括弧式にする (**巻き戻しなし**) | **`rewind`** して式として読み直す (二度読み) |
+| 「引数として不正な形」 | `refDestructuringErrors` に印を付けておき、アローと分かった後で検査 | 引数として読む時点で普通のエラーとして出る |
+
+**核心の違い**: acorn は「式」という1種類の木を作って後で**木を作り直す** (読み直しはないが、再解釈と検査のコードが要る)。oxc は「引数」として試して
+外れたら**トークン列を巻き戻して読み直す** (再解釈のコードは要らないが、外れたときは二度読み)。前のメモの「仕様はアローにカバー文法を使うが、oxc は投機パースを選んだ」の
+具体的な中身。ただし oxc も混成で、分割代入の式→パターン変換 (`SimpleAssignmentTarget::cover` など、5.2 のトレースにも出た) はカバー文法の考え方。
+
+仕様の文法は oxc の docs (`~/ghq/github.com/oxc-project/website/src/docs/learn/ecmascript/grammar.md:594` 「仕様が挙げる3つのカバー文法」、
+`CoverParenthesizedExpressionAndArrowParameterList`) に一覧がある (`javascript-parser-in-rust` には、grep でカバー文法の記述は見つからなかった)。
+
+#### 「同じ判定を2か所に持つ」3つの種類 — 最適化のためとは限らない (5.5 の入口の近道から)
+
+`is_parenthesized_arrow_function_expression` (`js/arrow.rs:58`) の入口に、先読みを丸ごと飛ばす近道がある。コメントの訳:
+「`(1 + a)` は決してアロー関数の引数になり得ない。先頭のリテラルは `BindingElement` (引数の1つ分) の始まりではないので、`worker` はそれを1つ飛ばして
+`Tristate::False` を返すことになる (`!second.is_binding_identifier() && second != This`)。だから先読みを飛ばす」。`(` の次のトークンだけで `False` と決まる場合は、
+`checkpoint` と `rewind` の往復を払わずに即 `False` にする。`worker` の中の判定と同じ条件を入口に写している。
+
+同じ判定を2か所に持つ理由で3種類に分けられる:
+
+| 種類 | 例 | 目的 | 食い違うと |
+|---|---|---|---|
+| **最適化の2重管理** | `worker` と速い経路: `is_parenthesized_arrow_function_expression_worker` と入口の「`(` の次がリテラルなら `False`」、`at_start_of_ts_declaration_worker` と高速経路 | **速さ**。遅い経路だけでも正しく動く。速い経路は「結果は同じで checkpoint/rewind を払わない」ためだけに後から足された分 | 速い経路に落ちるかで結果が変わる (バグ)。コメントで「exactly 一致」を保証する |
+| **構造上の2重管理** | `parse_non_array_type` の `match` の腕 (と各階層の腕) と `is_start_of_type` (1.4) | **判定を別の場所から呼べること** (`?` の後ろ、`[` の後ろ、`(` が関数型か、など)。型を開始できるトークンの集合が、パースする関数の腕に暗黙にあり、判定する関数が明示的に列挙し直す | 判定とパースが食い違う (バグ) |
+| **表と裏の2重管理** | `parse_unary_expression_or_higher` の `Kind::LAngle if !is_jsx()` の腕と `parse_update_expression` の `if is_jsx() && at(LAngle)` (5.3) | 段ごとの振り分け | `<` の行き先がずれる |
+
+```
+速い経路 (最適化) ──決まらなければ──▶ 遅い経路 (正しさの本体)
+```
+
+「最適化のため」と言い切れるのは1種類目だけ。これは oxc が tsc の移植の上に速さの近道を足すときの典型的な形 (ブログのトリビア 15。近道の例:
+`at_start_of_ts_declaration` の高速経路、`parse_type_arguments_in_expression` の早期リターン、`parse_lhs_expression_or_higher_impl` の `(` / `?.` ガード = PR #23063、
+今回の `(` の次のリテラル)。
+
+#### 5.5 `Tristate` の判定 (`js/arrow.rs:58-216`) — `(` の次の数トークンで True / False / Maybe を決める
+
+**`Tristate` の3値と行き先** (`try_parse_parenthesized_arrow_function_expression`、`:18`):
+
+| `Tristate` | 意味 | 次に起きること |
+|---|---|---|
+| `False` | アロー関数ではない | `None` を返し、呼び出し元がふつうの式として読む |
+| `True` | 確実にアロー関数 | `parse_parenthesized_arrow_function_expression` でそのまま読み切る (巻き戻しなし) |
+| `Maybe` | 試さないと分からない | `parse_possible_parenthesized_arrow_function_expression` (`:356`) = **投機**: `checkpoint_with_error_recovery` → 引数として読んでみる (`parse_parenthesized_arrow_function_head`) → 致命的エラーなら `rewind` して `None`、読めれば本体 (`=> ...`) も読む |
+
+「投機に回す」= `Maybe` のとき、上の投機の関数を呼ぶこと。`([x]) => x` は引数として読めて `=>` もあるのでアロー関数、`([x])` (括弧式) は引数として読めても `=>` が
+来なくて失敗し、巻き戻して括弧式として読み直す (acorn との比較で見た「外れたら巻き戻して読み直す」の実際の場所)。入口 `is_parenthesized_arrow_function_expression`
+(`:58`) は `(` `<` `async` のときだけ `_worker` を `lookahead` で走らせ、それ以外は即 `False`。`(` の次がリテラルなら `_worker` も飛ばして `False` (入口の近道)。
+
+**`_worker` の `match first { Kind::LParen => match second { ... } }` (`(` の腕) の場合分け**。`first` は最初に食べたトークン (`(` か `<`)、`second` はその次、`third` はさらに次:
+
+| `second` (`(` の次) | 入力 | 結果 | 理由 |
+|---|---|---|---|
+| `)` | `() =>` / `() {` | `third` が `=>` か `{` なら `True`、それ以外は `False` (TS で `:` が続けば `True`、`async` なら `Maybe`) | `()` だけでは JS の式として無効 (括弧の中には1個以上の式が必要)。だからアロー関数以外あり得ない |
+| `[` `{` | `([x]) =>` / `({x}) =>` と `([x])` / `({x})` | **常に `Maybe`** | 分割代入の引数か配列/オブジェクトリテラルか、先読みでは決められない (括弧の中身が長くなり得る)。カバー文法が必要になる場所 |
+| `...` | `(...args) =>` | `third` が識別子なら `True`、リテラルなら `False`、それ以外は `Maybe` | `...` は括弧式の中には書けない (rest 引数だけ)。`(...null` は違う |
+| 識別子など | `(a` `(a:` `(a?` `(a,` `(a=` `(a)` | 下の表 | `third` (さらに次) で決める |
+
+識別子で始まる場合 (`_ =>` の腕) の判定は、上から順に:
+
+1. **修飾子の連なり**: `second` が修飾子 (`private` `public` など、`async` 以外) で `third` が識別子なら `True` (ただし `third` が `as` なら `False`、TypeScript#44466 の対応)。
+   `(private x` は文法的には間違いだが、アロー関数として読んだほうが良いエラーメッセージを出せるため (**曖昧さの解決ではなくエラーメッセージの品質のための分岐**)
+2. **名前でなければ `False`**: `!second.is_binding_identifier() && second != Kind::This` (`this` はパラメータ `this: T` の TS 構文があるので通す)。入口のリテラルの近道と同じ条件
+3. **`third` で決める**:
+
+| `third` | 例 | 結果 | 理由 |
+|---|---|---|---|
+| `:` | `(a: number) => x` | **`True`** | 型注釈付きの引数。JS に `(a:` で始まる式は無い |
+| `?` + (`:` `,` `=` `)`) | `(a?: T)` `(a?)` `(a?, b)` `(a? = 1)` | **`True`** | 省略可能な引数 (TS 独自の書き方) |
+| `?` + それ以外 | `(a ? b : c)` | `False` | 三項演算子 |
+| `,` `=` `)` | `(a, b)` `(a = 1)` `(a)` | **`Maybe`** | 括弧式でもアロー引数でも成り立つ。**曖昧の本体** |
+| それ以外 | `(a + b)` | `False` | 引数の名前の次に来られない |
+
+**見どころ: TS が構文を足したことで、かえって曖昧さが減る**。`(a:` や `(a?:` で始まる**式**は JS に無いので、これらが来たらアロー関数と確定できる (先読みで決まる形が増える)。
+**投機 (二度読み) に回るのは `(a)` `(a, b)` `(a = 1)` `([x])` `({x})` など、型注釈が付かず JS でも通る形だけ**。コードの動きからの整理で、実際に投機に落ちる割合を測ったわけではない。
+ブログのトリビア向き。
+
+**tsc との対応**: `isParenthesizedArrowFunctionExpression` (`parser.ts:5234`) と `isParenthesizedArrowFunctionExpressionWorker` (`:5249`)、ts-go は
+`isParenthesizedArrowFunctionExpression` (`parser.go:4248`) と `nextIsParenthesizedArrowFunctionExpression` (`:4265`)。`Tristate` の3つ目の値の名前は oxc が `Maybe`、
+tsc が `Unknown`。`_worker` という名前は tsc 由来 (ts-go は `nextIs...` に変えている)。**修飾子の分岐 (コメントも `#44466` の対応も)、`(` の次が名前でなければ `False` の判定は
+コメントまで逐語訳**で、oxc が変えたのは「次のトークンの取り方」だけ (tsc は `lookAhead(nextTokenIsIdentifier)` や `nextToken()` で都度進めるのを、oxc は `third` を先に読んで使い回す)。
+「良いエラーメッセージのために間違った形もアローとして読む」は oxc 独自の判断ではなく tsc が最初から持つ考え方。
+
+#### 5.5 `checkpoint_with_error_recovery` と、三項演算子の `:` がぶつかる長いコメント (demos/oxc-step5c)
+
+**`checkpoint_with_error_recovery` は普通の `checkpoint` と、レキサーのエラーの保存のしかただけが違う** (`cursor.rs:309-327`、`lexer/mod.rs:198-262`)。
+`ParserCheckpoint` の `lexer` フィールドの作り方 1 行の差で、`errors_snapshot` が普通は **`Count(len)`** (件数だけ)、こちらは **`Full(errors.clone())`**
+(エラーのリスト全体をコピー。ドキュメントに「より高価」とある)。`rewind` は `Empty` → 全消去、`Count(len)` → その件数まで `truncate`、`Full(errors)` → 丸ごと元のリストに戻す。
+`truncate` は「投機の間にエラーが**増える**だけ」なら戻せるが、`errors.pop()` のように**減る**と、取り出されたエラーは戻らない (`set_unexpected` の中に
+`self.lexer.errors.pop()` がある)。Session 0 のメモの「エラーの巻き戻しは2段構え」の `Full` を使う実際の場所がここ。「唯一 `checkpoint_with_error_recovery` を使う場所」とは、
+「投機の失敗時にエラーを取り出す (減らす) 可能性がある唯一の場所」の意味だと思われる (私のコードからの読みで、なぜ他の投機では要らないかは確かめていない)。
+
+**長いコメントの訳** (`parse_possible_parenthesized_arrow_function_expression` の後半、`js/arrow.rs:379-392`):
+
+```
+// 例えば、次の式があるとする:  x ? y => ({ y }) : z => ({ z })
+// 最初のアロー関数の本体を、次の部分を見て読もうとする:  ({ y }) : z => ({ z })
+// これは、`z` を戻り値の型とする、有効なアロー関数である。
+// ところが、条件式の真側にいる場合は、このコロンが式を終わらせる。だから、その前の部分を
+// 引数リストとして読んだかどうかが確かでないなら、戻り値の型を許すことはできない。
+// 例えば、  a() ? (b: number, c?: string): void => d() : e
+// は、`isParenthesizedArrowFunctionExpression` が曖昧さなくアロー関数だと判定するので、戻り値の型を許す。
+```
+
+TS では `:` が**三項演算子**と**アロー関数の戻り値型**の2つの意味を持ち、条件式の真側でぶつかる。コード (`allow_return_type_in_arrow_function` は三項の真側で偽):
+
+```rust
+if !allow_return_type_in_arrow_function && has_return_type {
+    if !self.at(Kind::Colon) {                     // 読めたアローの後ろにもう1つ `:` が続かない
+        self.state.not_parenthesized_arrow.insert(pos);
+        self.rewind(checkpoint);                   // 戻り値型を許されない場所で読んでしまった → 巻き戻す
+        return None;
+    }
+}
+```
+
+tsc の原文にはこの後に続くコメントがある: 「読めたアロー関数の**後ろにもう1つコロンが続く**なら (`a ? (x): string => x : null`) そのアロー関数を許し、2つ目のコロンを条件式を
+終わらせるものとして扱う。JS では2つ目のコロンは構文エラーになるコードなので、こうして構わない」。判定は「戻り値型の後ろにもう1つ `:` が続くか」で、三項の `:` を戻り値型の `:` と
+取り違えていないかを確かめている。
+
+| 入力 (三項の真側) | 投機の結果 | 扱い |
+|---|---|---|
+| `a ? (x): string => x : null` (demo2) | 戻り値型があり、後ろにもう1つ `:` | **許す** |
+| `x ? y => ({ y }) : z => ({ z })` (demo1) | `({ y }) : z => ...` を戻り値型付きで読めるが、後ろに `:` が無い | **許さない** (巻き戻す) |
+| `a() ? (b: number, c?: string): void => d() : e` (demo3) | `Tristate::True` (`(b:` で確定) | 投機の関数を**通らない** → 許す |
+
+**実測 (`demos/oxc-step5c`、8ケース。oxc と tsc 6.0.3 の木は全ケース同じ)**: 投機で外れて巻き戻すのは demo1・4・6・8、成功は demo2・5・7、`True` で投機を通らないのは demo3。
+demo6 (`a ? (b) : c => d`) は `(b) : c => d` を戻り値型 `c` 付きのアローと最後まで読めるが、真側では許されず捨て、`:` は三項の区切り・`c => d` は偽側のアローになる。
+**トレースには2種類の `rewind` がある**: ① 先読み (`Tristate` の判定、`is_parenthesized_arrow_function_expression` の直後に毎回出る)、② 投機が外れた `rewind` (`[checkpoint(error recovery)]` の後に出る)。
+`.flow.txt` には `← ...` の注釈を直接書き込んである (`tools/annotate.py`、再採取すると消えるので再実行する)。
+
+**tsc との構造の違い**: 長いコメントも `hasReturnColon` (oxc は `has_return_type`) の条件も逐語訳だが、構造が違う。tsc は投機の入口 `parsePossibleParenthesizedArrowFunctionExpression`
+(`parser.ts:5379`、約12行) と、実際に読む `parseParenthesizedArrowFunctionExpression` (`:5428`、約100行) の2関数に分かれ、**巻き戻しは呼び出し側の `tryParse(() => ...)` が担当**
+(関数は失敗のとき `undefined` を返すだけ。コメントに「ここで `undefined` を返すと、呼び出し側が開始位置に巻き戻す」)。oxc は入口の関数の中に全部が入り、`checkpoint` → `rewind` を直接書く。
+**`notParenthesizedArrow` (tsc) / `self.state.not_parenthesized_arrow` (oxc) は同じ仕組み**: 「この位置はアロー関数ではなかった」と記録する集合で、同じ位置で二度目の投機を
+すぐ諦めるためのもの (同じ位置を何度も投機するのを避ける、と読める)。
+
+**5.5 で読んでいない所**: `Kind::LAngle` の腕 (`<T>(x) =>`、`.tsx` の `<T,>()`)、冒頭の `async` の処理、`not_parenthesized_arrow` の効果の実測。
+
 ## 進捗
 
 - [x] Session 0: checkpoint / rewind / re-lex
@@ -2312,6 +2485,6 @@ parse_assignment_expression_or_higher   (:1479  代入 `=` 、アロー関数を
 - [x] Session 3: 3.3 (型引数) は先取り + 見直し (2026-09-21、demos/oxc-step3 の呼び出し順トレース) で完了。
       3.1・3.2 はスキップ
 - [x] Session 4 (縮小): 4.1 は呼び出し元と高速経路まで読んだ (2026-09-21)。4.2・4.4 はスキップ
-- [ ] Session 5: JS 式への食い込み (5.1 as/satisfies・5.2 `!`・5.3 `<T>expr` は完了、5.4 はスキップ、残りは 5.5 arrow 曖昧性)。
+- [x] Session 5: JS 式への食い込み (5.1 as/satisfies・5.2 `!`・5.3 `<T>expr`・5.5 arrow 曖昧性は完了、5.4 はスキップ)。
       `!` と instantiation は `parse_member_expression_rest` の `match` の腕として見えている
 - [x] Session 6: 丸ごとスキップ
