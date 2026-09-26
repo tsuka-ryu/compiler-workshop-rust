@@ -19,6 +19,21 @@
 
 TS 文法は LL(1) では決まらない箇所だらけ。oxc の答えは **checkpoint → 試しに読む → だめなら rewind**。
 
+> **注: この仕組みは TS 専用ではない。** 定義は `cursor.rs` (パーサー共通) にあり、純 JS の曖昧性にも使われている:
+>
+> - `js/arrow.rs:58` — `(` / `async` の先がアロー関数か (`(a, b) => …` vs `(a, b)`)。`lookahead`
+> - `js/arrow.rs:219` — 括弧なし `async x => …` の判定。`lookahead`
+> - `js/arrow.rs:365` — アローを試しにパース。唯一の `checkpoint_with_error_recovery` (5.5)
+> - `js/statement.rs:436` — `for (using x of y)` vs `for (using of arr)`。`lookahead`
+> - `js/declaration.rs:47` — `await using` 宣言の判定。`lookahead`
+> - `js/statement.rs:65` + `lib.rs:865` — 文ごとに checkpoint を溜め、ESM と判明したら戻って `await` を読み直す
+> - `error_handler.rs:185` — マージ競合マーカー `<<<<<<<` の走査後に戻る
+>
+> JS 側は「覗いて必ず戻る」`lookahead` がほとんどで、`checkpoint` を直に取って「読めたら採用・だめなら rewind」
+> するのはアロー (365) だけ。TS 側 (`ts/`) は後者が 4 箇所 (`ts/types.rs:91` / `:347` / `:927`、`ts/statement.rs:288`)、
+> `lookahead` が 6 箇所。汎用の `try_parse` ヘルパーは無く、`try_parse_*` は個別関数の名前にすぎない。
+> なお `js/module.rs:1048` は `import type` 判定で実質 TS。
+
 - [x] 0.1 `cursor.rs:309` `checkpoint()` / `:329` `rewind()` / `:340` `lookahead()` —
       保存するのは位置とカウンタだけ。arena の AST は巻き戻さない
 - [x] 0.2 `lexer/mod.rs:51` `LexerCheckpoint` / `:198` 実装本体 —
