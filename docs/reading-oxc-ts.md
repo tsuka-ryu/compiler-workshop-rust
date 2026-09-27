@@ -221,7 +221,47 @@ Session 3 の 3.1 (`parse_signature_member`) は分岐するだけの部品、3.
 ## 読み方のコツ
 
 - **テストを動かしながら読む**: `cargo run -q -p oxc_parser --example parser -- 適当な.ts --estree`。
-  トークン列は `--example tokens_dump` (Session 0 で自作、oxc 側に未追跡ファイルで設置済み)
+  トークン列は `--example tokens_dump` — ただしこれは oxc 本体にはない自作コマンド (Session 0 で追加)。
+  **挿入先**: `~/ghq/github.com/oxc-project/oxc/crates/oxc_parser/examples/tokens_dump.rs`
+  (oxc 側では未追跡ファイル。`cargo run --example` は `examples/` 配下にあれば
+  git 追跡の有無を問わず拾うので、これで動く)。このリポジトリ側にも同じ内容を
+  `demos/oxc-step0/tokens_dump.rs` として追跡済みで置いてある。実装:
+  ```rust
+  //! Dump the collected token stream of a file.
+  //!
+  //! ```bash
+  //! cargo run -p oxc_parser --example tokens_dump -- file.ts
+  //! ```
+
+  use std::{fs, path::Path};
+
+  use oxc_allocator::Allocator;
+  use oxc_parser::{Parser, config::TokensParserConfig};
+  use oxc_span::SourceType;
+
+  fn main() -> Result<(), String> {
+      let name = std::env::args().nth(1).ok_or("usage: tokens_dump <file>")?;
+      let path = Path::new(&name);
+      let source_text = fs::read_to_string(path).map_err(|_| format!("Missing '{name}'"))?;
+      let source_type = SourceType::from_path(path).unwrap();
+
+      let allocator = Allocator::default();
+      let ret = Parser::new(&allocator, &source_text, source_type)
+          .with_config(TokensParserConfig)
+          .parse();
+
+      for token in &ret.tokens {
+          let text = &source_text[token.start() as usize..token.end() as usize];
+          println!("{:>3}..{:<3} {:<16} {text:?}", token.start(), token.end(), format!("{:?}", token.kind()));
+      }
+      Ok(())
+  }
+  ```
+  oxc 側の設置が消えた場合の復元:
+  ```bash
+  cp demos/oxc-step0/tokens_dump.rs ~/ghq/github.com/oxc-project/oxc/crates/oxc_parser/examples/tokens_dump.rs
+  cd ~/ghq/github.com/oxc-project/oxc && cargo run -q -p oxc_parser --example tokens_dump -- <file>
+  ```
 - 迷子になったら `parse_ts_type` (types.rs:15) と `parse_non_array_type` (types.rs:411) に戻る。
   型パーサーの全経路はこの 2 つを通る
 - 自作 `src/js/` との対応: 自作の Pratt = oxc の `js/expression.rs`、

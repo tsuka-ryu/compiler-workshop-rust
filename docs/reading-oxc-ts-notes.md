@@ -727,15 +727,16 @@ LT では触れずにブログ側へ回す。トリビアのタイトル案:
 | 5 | `namespace string {}` が書ける | JS は `string` を予約語にしなかった。だから `.` を 1 トークン先読みする | `string`/`number` は予約語じゃない、の節 |
 | 6 | `infer T extends U ? A : B` は誰の `extends`? | 曖昧なときだけ checkpoint する 4 分岐 | 1.3 後半の節、demo12-15 |
 | 7 | 「立っている」フラグは動的スコープ | `DisallowConditionalTypes` を付け外しして再帰を制御する | 1.3 後半の節 (`context_add`) |
-| 8 | `<` は 2 回読まれる | レキサーへの re-lex 依頼。`lexer/typescript.rs` は 53 行中 40 行がコメント | Session 0 の節、demos/oxc-step0 |
+| 8 | `<` は 2 回読まれる | レキサーへの re-lex 依頼。`lexer/typescript.rs` は 53 行中 40 行がコメント。開く側と閉じる側で後始末が非対称 (`<<` は収集済みの列を書き換えるので失敗時に `rewrite_last_collected_token` で書き戻す、`>` は最初から1文字ずつなので rewind の truncate が消してくれて後始末ゼロ)。理由は頻度の賭け (閉じの `>>` は日常、開きの `<<` は珍事)。ブログ第3回からは外した (題材の2行では発生しないため) | Session 0 の節、demos/oxc-step0 |
 | 9 | `{ [K in` と `{ [key:` は 4 トークン目で分かれる | 固定長の先読み。`is_start_of_type` との 2 重管理も | 1.4・2.1 の節 |
 | 10 | 型の中に JSDoc が住んでいる | `T?` を JSDoc nullable と conditional の `?` で読み分ける。`*` は未移植 | 1.4 の JSDoc の節 |
 | 11 | Microsoft 自身も落とした機能 | `JSDocFunctionType` は tsc 6.0 にあり、ts-go 7.x で無い | 1.4 の JSDoc の節 (比較表) |
 | 12 | コメントアウトされた他人のコード | 移植とは何を捨てるかの選択 | 1.3 の LT 有力候補の節 |
 | 13 | TS 専用のパーサーは無い | 同じパーサーが `is_ts` (54か所) で TS の枝を切り替える。`.js` に型注釈を書くと普通の JS としてエラー | 2.3 の節の「`is_ts` フラグ」 |
 | 14 | AST は1つで JS と TS が混ざる | `TSLiteralType` の中に JS の `TemplateLiteral` が入る。`--estree` はその1つの木を書き出しただけ | 2.3 の節の「AST は1つ」 |
-| 15 | tsc の移植の上に足された近道 | `at_start_of_ts_declaration` の高速経路は tsc・ts-go に無い。同じ判定を2か所に書き写し「exactly 一致」とコメントで保証 (`is_start_of_type` の2重管理・`<` の早期リターンも同種) | 4.1 の節の「高速経路」 |
+| 15 | tsc の移植の上に足された近道 | `at_start_of_ts_declaration` の高速経路は tsc・ts-go に無い。同じ判定を2か所に書き写し「exactly 一致」とコメントで保証 (`is_start_of_type` の2重管理・`<` の早期リターンも同種。ただし `<` の早期リターンは ts-go にも同じものがある → 22) | 4.1 の節の「高速経路」 |
 | 21 | プロファイルの1番のホットスポットは、tsc の移植のままの無駄だった | `parse_call_expression_rest` が式の葉ごとに member-rest を再走査していた。tsc・ts-go も同じ形で最適化していない。oxc は1つの `if` で約13%高速化 (PR #23063、AST はバイト単位で同一) | 5.2 の節 |
+| 22 | ts-go は移植したあとで JS 版 tsc から離れ始めている | `<` でなければ checkpoint の前に抜ける門番は、JS 版 tsc 6.0.3 には無い。2026年6月に ts-go (typescript-go #4234) と oxc (#23069) の両方にほぼ同時に入った。ts-go 側は `checker.ts` のパースが 13.74% 速くなった | 5.5 の後の「ts-go にも同じ門番」 |
 | 16 | `class A extends B<string> {}` は `<string>` が2回読まれる | 式側の投機が `{` で失敗して rewind し、`try_parse_type_arguments` で読み直す (改行や `implements` が続くと成功する) | 3.3 見直しの節、demos/oxc-step3 の demo6・11・12 |
 | 17 | `1 + 1 as number / 2` の `as` は思ったより優先順位が低い | 型を消すだけの除去ツールと意味が食い違う問題 (TypeScript#63527) → ts-go#4192 (Anders) → oxc#22986 (Boshen) が ts-go のマージから約16時間で追従。「`as` の優先順位がこんなに低いとは」と驚く人が多数 | 5.1 の節 |
 | 18 | 式は Pratt、型は階層を関数で固定した再帰下降 | `parse_binary_expression_rest` (演算子が多い) と `parse_union_type_or_higher` → ... (演算子が `\|` `&` 程度)。自作の Pratt と並べられる | 5.1 の節 |
@@ -2369,8 +2370,55 @@ if (canBeArrow && this.shouldParseArrow(exprList) && this.eat(tt.arrow)) {   // 
 ```
 
 「最適化のため」と言い切れるのは1種類目だけ。これは oxc が tsc の移植の上に速さの近道を足すときの典型的な形 (ブログのトリビア 15。近道の例:
-`at_start_of_ts_declaration` の高速経路、`parse_type_arguments_in_expression` の早期リターン、`parse_lhs_expression_or_higher_impl` の `(` / `?.` ガード = PR #23063、
+`at_start_of_ts_declaration` の高速経路、`parse_type_arguments_in_expression` の早期リターン (ただし ts-go にも同じものがある。下の節)、`parse_lhs_expression_or_higher_impl` の `(` / `?.` ガード = PR #23063、
 今回の `(` の次のリテラル)。
+
+#### ts-go にも同じ門番 — `parse_type_arguments_in_expression` の早期リターンは oxc 独自ではなかった (2026-09-27、ブログ第3回のレビュー中に確認)
+
+「`<` / `<<` でなければ checkpoint の前に `None` で抜ける」門番 (`ts/types.rs:914`、3.3) を「tsc の移植の上に oxc が足した近道」の例に数えていたが、
+**Go 版 tsc (ts-go) にもまったく同じ門番がある**。元の JS 版 tsc には無い。3者を並べるとこうなる:
+
+| 実装 | 門番 | 状態を保存するタイミング |
+|---|---|---|
+| JS 版 tsc 6.0.3 (`lib/typescript.js:37102`、npm の配布物で確認) | 無い | 呼び出し元が `tryParse(parseTypeArgumentsInExpression)` (3か所) で包むので、`<` が来なくても毎回保存 → 巻き戻し |
+| ts-go (`tsc/internal/parser/parser.go:5299` `tryParseTypeArgumentsInExpression`) | ある | 門番のあとで `p.mark()` |
+| oxc (`ts/types.rs:914`) | ある | 門番のあとで `self.checkpoint()` |
+
+ts-go のコード (コメントは「状態を保存する前に安い前提条件を確かめる」):
+
+```go
+func (p *Parser) tryParseTypeArgumentsInExpression() *ast.NodeList {
+	// TypeArguments must not be parsed in JavaScript files to avoid ambiguity with binary operators.
+	// Check the cheap preconditions before saving the parser state: unless the current token is `<`
+	// (or `<<`, which reScanLessThanToken would split), there is nothing to speculatively parse and
+	// the mark/rewind would be a no-op.
+	if p.contextFlags&ast.NodeFlagsJavaScriptFile != 0 || (p.token != ast.KindLessThanToken && p.token != ast.KindLessThanLessThanToken) {
+		return nil
+	}
+	state := p.mark()
+```
+
+**どちらも2026年6月の PR で入った** (`gh pr view` で確認):
+
+| | ts-go #4234 | oxc #23069 |
+|---|---|---|
+| タイトル | Skip mark/rewind in `tryParseTypeArgumentsInExpression` when token isn't `<` | perf(parser): guard type-argument speculation behind an angle-token check |
+| 作者 | mds-ant | Boshen |
+| 作成 → マージ | 2026-06-06 22:28Z → 06-22 | 2026-06-07 12:25Z → 06-08 |
+| 動機 (PR 本文) | この関数はメンバーアクセスの `.` や呼び出しのたびに呼ばれ、毎回パーサーとスキャナーの状態を丸ごと保存しては巻き戻していた。`<<` 以外では no-op の往復 | `a?.(` や `a?.b` などが毎回 checkpoint/rewind の往復を払って `None` を受け取っていた |
+| 効果 | `checker.ts` のパースが 13.74% 速い (33.78ms → 29.14ms)、`Herebyfile.mjs` が 8.01%、幾何平均 4.69% | 数字なし。test262 / Babel / TypeScript / ESTree のスナップショットがバイト単位で同一 |
+| 備考 | 「This PR was assisted by Claude Code」 | 「Generated with Claude Code」 |
+
+作成は ts-go が約14時間早く、マージは oxc が先。**どちらかがどちらかを参考にしたという証拠は無い** (両 PR とも相手に言及していない)。
+
+ts-go の `p.mark()` (`parser.go:352`) が保存するのは、スキャナーの状態 (`p.scanner.Mark()`)・`contextFlags`・診断や JSDoc などの件数4つ・フラグ2つ。
+`.` のたびにこれを払っていたので効果が大きかったと考えられる (JS 版 tsc の `tryParse` が保存するものとの比較はしていない)。
+
+**分かったこと**: 「ts-go は tsc の忠実な移植」は移植した時点の話で、**移植のあとは速さのための手が入り始め、JS 版から離れつつある**。
+このノートでは ts-go と oxc をどちらも「tsc の移植」として同じ側に置いて比べていたが、この門番については JS 版 tsc だけが古い形のまま。
+一方、`at_start_of_ts_declaration` の高速経路 (4.1) と、アロー判定の「`(` の次がリテラルなら先読みを飛ばす」近道 (#23070、上の節) は
+ts-go の `isStartOfDeclaration` (`parser.go:6123`、`lookAhead` のみ) と `isParenthesizedArrowFunctionExpression` (`parser.go:4248`) には無く、今のところ oxc 独自
+(ts-go は 2026-09-19 時点の `microsoft/TypeScript` の `tsc/` で確認。手元の clone は1コミットだけなので、ts-go 側の履歴は GitHub で追った)。
 
 #### 5.5 `Tristate` の判定 (`js/arrow.rs:58-216`) — `(` の次の数トークンで True / False / Maybe を決める
 
