@@ -675,27 +675,26 @@ E・F・G をまとめると、**「同じ TypeScript を読む3者は、どこ�
 | ゴール | TS の構文の見方が変わる (コードは読まなくていい) |
 | 一言 | TS は JS の中に住んでいる (最初と最後に言う) |
 | 主語 | oxc のパーサー (体験談として)。tsc との違いは基本的に触れない |
-| 例 | `a < b > (c)` が呼び出しになる / `<T>x` が拡張子で3通り |
+| 例 | `f<T>(x);` / `a < b > c;` / `a < b > (c);` の3つを並べる (同じ形なのに、閉じた直後の1文字で呼び出しと比較に分かれる)。`<T>x` の拡張子3通りは外した (2026-10-03) |
 | 用語 | パーサー・AST・投機パースなどは、さらっと説明するだけ |
 | 見取り図 | コードの見取り図ではなく、構文の地図 (型の文法 / TS だけの文 / JS の式への食い込み の3つの世界) |
-| コード | 例2の1か所だけ見せる |
+| コード | 見せない (見せる予定だった例2を外したため) |
 | 締め | 一言をもう一度言うだけ (ブログには触れない) |
 | 流れ | 「TypeScript parser を眺めに行ったら、TypeScript parser というものは無かった。TS は JS の中に住んでいた」でタイトルとオチをつなぐ |
 
 | 時間 | 内容 | 見せ方 |
 |---|---|---|
-| 0:00-0:30 | 自己紹介。「今日は oxc の TypeScript parser を眺めに行きます」。問い「`a < b > (c);` は何になると思います?」(答えは伏せる) | 入力1行 |
+| 0:00-0:30 | 自己紹介。「今日は oxc の TypeScript parser を眺めに行きます」。問い「`f<T>(x);` `a < b > c;` `a < b > (c);` のうち、関数呼び出しはどれ?」(答えは伏せる) | 入力3行 |
 | 0:30-1:00 | さらっと前提: パーサー、AST、oxc | 図 |
 | 1:00-2:00 | 探しに行く: パーサーのディレクトリを眺めると `ts/` は1割ほど。TypeScript parser というものは無かった。`is_ts` というスイッチ1つで JS のパーサーが TS の枝を開け閉めしている | ディレクトリと行数の図 |
 | 2:00-3:00 | では TS はどこにいるのか: 構文の地図 (3つの世界) | 3つの世界の図 |
-| 3:00-3:45 | 証拠1: `a < b > (c)` は呼び出し。JS の式を読む途中で `<` を見たら試しに型引数として読み、閉じた直後が `(` なら呼び出しと決める (投機パースをさらっと)。住所は「JS の式への食い込み」 | 図。冒頭の問いの答え合わせ |
-| 3:45-4:30 | 証拠2: `<T>x` は拡張子で3通り (`.ts` 型アサーション / `.tsx`・`.jsx` JSX / `.js` エラー)。1つの分岐に JSX と TS のスイッチが並ぶ | oxc のコード1か所 |
+| 3:00-4:30 | 証拠: 3つの答え合わせ。`f<T>(x)` と `a < b > (c)` は呼び出し、`a < b > c` は比較 `(a < b) > c`。途中までは同じ形で、JS の式を読む途中で `<` を見たら試しに型引数として読み、閉じた直後が `(` なら呼び出し、識別子なら戻って比較として読み直す (投機パースをさらっと)。住所は「JS の式への食い込み」 | 3つの入力と木を並べた図。冒頭の問いの答え合わせ |
 | 4:30-5:00 | 締め: 「TypeScript parser は無かった。TS は JS の中に住んでいる」。地図をもう一度 | 3つの世界の図 |
 
 裏取り (2026-10-03、oxc rev `1aa5ec11ce`、tsc 6.0.3):
-- 例1 `a < b > (c);` → oxc・tsc 6.0.3 とも `CallExpression`
-- 例2 `const y = <T>x;` → oxc: `.ts` は `TSTypeAssertion`、`.tsx`・`.jsx` は JSX として読んで「Unexpected token」(閉じタグが無い)、`.js` は「Unexpected JSX expression」(`jsx_in_non_jsx`。oxc は `.js` で JSX を無効にしている)。tsc 6.0.3 は `.js` も JSX 扱い (`LanguageVariant.JSX`) なので2通りしかない → LT では触れない
-- 見せるコード: `parse_unary_expression_or_higher` (`js/expression.rs:1247`) の `Kind::LAngle if !self.source_type.is_jsx()` の腕 (`:1256`)。直前のコメントが3通りをそのまま説明している (「In a non-JSX, non-TS file a leading `<` is instead a JSX-in-non-JSX error … `<` in a JSX file … parses the JSX element」)
+- 例1 `a < b > (c);` → oxc・tsc 6.0.3 とも `CallExpression`。`f<T>(x);` は `CallExpression`、`a < b > c;` は二重の `BinaryExpression` (oxc はブログ第3回で確認、tsc は上の 2026-09-20 の表で 5.9 を確認済み)
+- (外した例2) `const y = <T>x;` → oxc: `.ts` は `TSTypeAssertion`、`.tsx`・`.jsx` は JSX として読んで「Unexpected token」(閉じタグが無い)、`.js` は「Unexpected JSX expression」(`jsx_in_non_jsx`。oxc は `.js` で JSX を無効にしている)。tsc 6.0.3 は `.js` も JSX 扱い (`LanguageVariant.JSX`) なので2通りしかない → LT では触れない
+- (外した例2で見せる予定だったコード) `parse_unary_expression_or_higher` (`js/expression.rs:1247`) の `Kind::LAngle if !self.source_type.is_jsx()` の腕 (`:1256`)。直前のコメントが3通りをそのまま説明している (「In a non-JSX, non-TS file a leading `<` is instead a JSX-in-non-JSX error … `<` in a JSX file … parses the JSX element」)
 - 未確認: 「`ts/` は1割ほど」の行数 (ブログ第2回の 24,406 行中 2,654 行) はスライドを作るときに数え直す
 
 ---
