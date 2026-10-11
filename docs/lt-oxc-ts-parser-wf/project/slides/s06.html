@@ -1,0 +1,31 @@
+<section id="s06" style="background:#F5F4EF;color:#1F2328;font-family:'Noto Sans JP', Arial, sans-serif;padding:96px 128px;display:flex;flex-direction:column;gap:32px">
+<p style="position:absolute;right:64px;top:40px;width:240px;text-align:right;font-size:24px;color:#8A877C">WF 06/15</p>
+<h2 style="font-size:48px;font-weight:700"><span style="color:#3E6FA8">a &lt; b &gt; (c);</span> 文法の段ごとの関数を、上から呼び降りる</h2>
+<div style="display:grid;grid-template-columns:780px 390px 1fr;gap:10px;background:#22262B;color:#E8E6DF;border-radius:12px;padding:36px;font-family:'JetBrains Mono', 'Courier New', monospace">
+<p style="font-size:28px">parse_statement_list_item</p>
+<p style="font-size:28px;color:#A8A598">js/statement.rs:131</p>
+<p style="font-size:28px;color:#C9C6BB;font-family:'Noto Sans JP', Arial, sans-serif">文を読む</p>
+<p style="font-size:28px;padding:0 0 0 28px">└ parse_assignment_expression_or_higher</p>
+<p style="font-size:28px;color:#A8A598">js/expression.rs:1479</p>
+<p style="font-size:28px;color:#C9C6BB;font-family:'Noto Sans JP', Arial, sans-serif">式を読む</p>
+<p style="font-size:28px;padding:0 0 0 56px">└ parse_binary_expression_or_higher</p>
+<p style="font-size:28px;color:#A8A598">js/expression.rs:1304</p>
+<p style="font-size:28px;color:#C9C6BB;font-family:'Noto Sans JP', Arial, sans-serif">二項演算を読む</p>
+<p style="font-size:28px;padding:0 0 0 84px">└ parse_lhs_expression_or_higher</p>
+<p style="font-size:28px;color:#A8A598">js/expression.rs:748</p>
+<p style="font-size:28px;color:#C9C6BB;font-family:'Noto Sans JP', Arial, sans-serif">左辺式を読む</p>
+<p style="font-size:28px;padding:0 0 0 112px">└ parse_member_expression_rest</p>
+<p style="font-size:28px;color:#A8A598">js/expression.rs:859</p>
+<p style="font-size:28px;color:#C9C6BB;font-family:'Noto Sans JP', Arial, sans-serif">後置 (. [ ! &lt;) を読む</p>
+<p style="font-size:28px;padding:0 0 0 140px;opacity:0">└ parse_type_arguments_in_expression</p>
+<p style="font-size:28px;color:#A8A598;opacity:0">ts/types.rs:914</p>
+<p style="font-size:28px;color:#C9C6BB;font-family:'Noto Sans JP', Arial, sans-serif;opacity:0">試しに型引数として読む</p>
+<p style="font-size:28px;color:#C9C6BB;font-family:'Noto Sans JP', Arial, sans-serif;padding:0 0 0 84px;grid-column:span 3;opacity:0">← 型引数を持ち帰って、左辺式の段に戻る</p>
+<p style="font-size:28px;padding:0 0 0 112px;opacity:0">└ parse_call_expression_rest</p>
+<p style="font-size:28px;color:#A8A598;opacity:0">js/expression.rs:1091</p>
+<p style="font-size:28px;color:#C9C6BB;font-family:'Noto Sans JP', Arial, sans-serif;opacity:0">呼び出しを組み立てる</p>
+</div>
+<p style="font-size:28px;color:#5A5850">上の段は、下の段を呼んで結果を待つだけ。間の段 (parse_expression_or_labeled_statement など) は省略</p>
+<aside>JS のパーサーは、たいてい再帰下降という作りです。文法の段ごとに関数があって、上の段は下の段を呼んで、結果が返ってくるのを待ちます。a < b > (c); も、文、式、二項演算、と js/ の関数を呼び降りていきます。
+WF メモ: ブログ第1回「降下のはしご」の書き方 (関数 / ファイル:行 / 役割の3列、└ で入れ子) にそろえた。まだ出していない行は透明にして置いてあるので、はしごの枚で行の位置が動かない。</aside>
+</section>

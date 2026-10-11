@@ -1,0 +1,476 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>oxcのTypeScript parserを眺める (WF)</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700&amp;display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&amp;display=swap">
+<style>
+* { box-sizing: border-box; margin: 0; font-variant-ligatures: none; }
+html, body { height: 100%; background: #111; overflow: hidden; }
+#stage { position: absolute; left: 50%; top: 50%; width: 1920px; height: 1080px;
+  transform-origin: center center; }
+section { position: absolute; inset: 0; width: 1920px; height: 1080px; overflow: hidden;
+  display: flex; flex-direction: column; }
+section:not(.current) { display: none !important; }
+div { display: flex; flex-direction: column; }
+h1 { font-size: 96px; font-weight: 600; line-height: 1.1; }
+h2 { font-size: 64px; font-weight: 600; line-height: 1.15; }
+h3 { font-size: 44px; font-weight: 600; line-height: 1.2; }
+p { font-size: 32px; line-height: 1.4; }
+section aside { display: none; }
+#notes { position: fixed; left: 0; right: 0; bottom: 0; max-height: 40%; overflow: auto;
+  background: rgba(20, 20, 20, 0.92); color: #eee; font: 18px/1.6 sans-serif;
+  padding: 16px 24px; white-space: pre-wrap; display: none; }
+#notes.show { display: block; }
+#page { position: fixed; right: 12px; bottom: 8px; color: #777; font: 14px sans-serif; }
+</style>
+</head>
+<body>
+<div id="stage">
+<section id="s01" style="background:#F5F4EF;color:#1F2328;font-family:'Noto Sans JP', Arial, sans-serif;padding:128px;display:flex;flex-direction:column;justify-content:center;gap:40px">
+<p style="position:absolute;right:64px;top:40px;width:240px;text-align:right;font-size:24px;color:#8A877C">WF 01/15</p>
+<h1 style="font-size:104px;font-weight:700;line-height:1.15">oxcのTypeScript parserを眺める</h1>
+<p style="font-size:40px;color:#5A5850">[名前] / TSKaigi LT</p>
+<aside>タイトルを読む。目安 5秒</aside>
+</section>
+
+<section id="s02" style="background:#F5F4EF;color:#1F2328;font-family:'Noto Sans JP', Arial, sans-serif;padding:96px 128px;display:flex;flex-direction:row;align-items:center;gap:80px">
+<p style="position:absolute;right:64px;top:40px;width:240px;text-align:right;font-size:24px;color:#8A877C">WF 02/15</p>
+<div style="width:360px;height:360px;background:#E2E0D8;border:2px dashed #9A978C;border-radius:180px;display:flex;align-items:center;justify-content:center"><p style="font-size:32px;color:#6B6960">[アイコン]</p></div>
+<div style="display:flex;flex-direction:column;gap:24px">
+<h2 style="font-size:72px;font-weight:700">[名前]</h2>
+<p style="font-size:40px;color:#5A5850">[所属]</p>
+<p style="font-size:32px;color:#5A5850">仙台なので牛タンを食べにきました</p>
+</div>
+<aside>名前と所属。「仙台なので牛タンを食べにきました」 目安 15秒</aside>
+</section>
+
+<section id="s03" style="background:#F5F4EF;color:#1F2328;font-family:'Noto Sans JP', Arial, sans-serif;padding:96px 128px;display:flex;flex-direction:column;justify-content:center;gap:64px">
+<p style="position:absolute;right:64px;top:40px;width:240px;text-align:right;font-size:24px;color:#8A877C">WF 03/15</p>
+<div style="display:flex;flex-direction:row;align-items:center;gap:64px">
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:120px;font-weight:700;width:1100px">a &lt; b &gt; (c);</p>
+<p style="font-size:44px;color:#5A5850">関数呼び出し</p>
+</div>
+<div style="display:flex;flex-direction:row;align-items:center;gap:64px">
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:120px;font-weight:700;width:1100px">a &lt; b &gt; c;</p>
+<p style="font-size:44px;color:#5A5850">比較</p>
+</div>
+<p style="font-size:32px;color:#5A5850">今日はこの2つで、oxc のパーサーの中を覗くだけ</p>
+<aside>今日はこの2つの文を例に、oxc のパーサーの中を覗いてみます。役に立つ話ではなく、中がどうなっているかを眺める話です。片方は関数呼び出しで、片方は比較です。</aside>
+</section>
+
+<section id="s04" style="background:#F5F4EF;color:#1F2328;font-family:'Noto Sans JP', Arial, sans-serif;padding:96px 128px;display:flex;flex-direction:column;gap:28px">
+<p style="position:absolute;right:64px;top:40px;width:240px;text-align:right;font-size:24px;color:#8A877C">WF 04/15</p>
+<h2 style="font-size:48px;font-weight:700">トークンはほぼ同じ、木はまったく違う</h2>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:48px">
+<div style="display:flex;flex-direction:column;gap:16px">
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:44px;font-weight:700">a &lt; b &gt; (c);</p>
+<p style="font-size:24px;color:#6B6960">↓ レキサー</p>
+<div style="display:flex;flex-direction:row;gap:10px;font-family:'JetBrains Mono', 'Courier New', monospace">
+<p style="font-size:30px;background:#FFFFFF;border:2px solid #6B6960;border-radius:8px;padding:4px 14px">a</p>
+<p style="font-size:30px;background:#FFFFFF;border:2px solid #6B6960;border-radius:8px;padding:4px 14px">&lt;</p>
+<p style="font-size:30px;background:#FFFFFF;border:2px solid #6B6960;border-radius:8px;padding:4px 14px">b</p>
+<p style="font-size:30px;background:#FFFFFF;border:2px solid #6B6960;border-radius:8px;padding:4px 14px">&gt;</p>
+<p style="font-size:30px;background:#FBE3C8;border:3px solid #D97A1E;border-radius:8px;padding:4px 14px">(</p>
+<p style="font-size:30px;background:#FFFFFF;border:2px solid #6B6960;border-radius:8px;padding:4px 14px">c</p>
+<p style="font-size:30px;background:#FBE3C8;border:3px solid #D97A1E;border-radius:8px;padding:4px 14px">)</p>
+<p style="font-size:30px;background:#FFFFFF;border:2px solid #6B6960;border-radius:8px;padding:4px 14px">;</p>
+</div>
+<p style="font-size:24px;color:#6B6960">↓ パーサー</p>
+<div style="display:flex;flex-direction:column;gap:4px;background:#FFFFFF;border:2px solid #6B6960;border-radius:8px;padding:20px;font-family:'JetBrains Mono', 'Courier New', monospace">
+<p style="font-size:26px;font-weight:700">CallExpression</p>
+<p style="font-size:26px;padding:0 0 0 32px">callee: Identifier "a"</p>
+<p style="font-size:26px;padding:0 0 0 32px;background:#FBE3C8">typeArguments: TSTypeParameterInstantiation</p>
+<p style="font-size:26px;padding:0 0 0 64px;background:#FBE3C8">params: [TSTypeReference "b"]</p>
+<p style="font-size:26px;padding:0 0 0 32px">arguments: [Identifier "c"]</p>
+</div>
+</div>
+<div style="display:flex;flex-direction:column;gap:16px">
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:44px;font-weight:700">a &lt; b &gt; c;</p>
+<p style="font-size:24px;color:#6B6960">↓ レキサー</p>
+<div style="display:flex;flex-direction:row;gap:10px;font-family:'JetBrains Mono', 'Courier New', monospace">
+<p style="font-size:30px;background:#FFFFFF;border:2px solid #6B6960;border-radius:8px;padding:4px 14px">a</p>
+<p style="font-size:30px;background:#FFFFFF;border:2px solid #6B6960;border-radius:8px;padding:4px 14px">&lt;</p>
+<p style="font-size:30px;background:#FFFFFF;border:2px solid #6B6960;border-radius:8px;padding:4px 14px">b</p>
+<p style="font-size:30px;background:#FFFFFF;border:2px solid #6B6960;border-radius:8px;padding:4px 14px">&gt;</p>
+<p style="font-size:30px;background:#FFFFFF;border:2px solid #6B6960;border-radius:8px;padding:4px 14px">c</p>
+<p style="font-size:30px;background:#FFFFFF;border:2px solid #6B6960;border-radius:8px;padding:4px 14px">;</p>
+</div>
+<p style="font-size:24px;color:#6B6960">↓ パーサー</p>
+<div style="display:flex;flex-direction:column;gap:4px;background:#FFFFFF;border:2px solid #6B6960;border-radius:8px;padding:20px;font-family:'JetBrains Mono', 'Courier New', monospace">
+<p style="font-size:26px;font-weight:700">BinaryExpression "&gt;"</p>
+<p style="font-size:26px;padding:0 0 0 32px">left: BinaryExpression "&lt;"</p>
+<p style="font-size:26px;padding:0 0 0 64px">left: Identifier "a"</p>
+<p style="font-size:26px;padding:0 0 0 64px">right: Identifier "b"</p>
+<p style="font-size:26px;padding:0 0 0 32px">right: Identifier "c"</p>
+</div>
+</div>
+</div>
+<p style="font-size:30px;color:#5A5850">JS として読むと <span style="color:#1F2328">a &lt; b &gt; (c);</span> も比較 <span style="color:#1F2328">(a &lt; b) &gt; (c)</span>。どう見分ける? 境界はどこ?</p>
+<aside>パーサーは、レキサーが切ったトークンを読んで、AST という木にします。トークンは括弧以外まったく同じなのに、木はまったく違います。しかもこの a < b > (c);、JS として読むとただの比較です。パーサーはどうやって見分けているのか。JS と TS の境界はどこにあるのか。それを見ていきます。
+WF メモ: 旧4枚目 (トークン) と旧5枚目 (AST) を1枚にまとめた。</aside>
+</section>
+
+<section id="s05" style="background:#F5F4EF;color:#1F2328;font-family:'Noto Sans JP', Arial, sans-serif;padding:96px 128px;display:flex;flex-direction:column;gap:40px">
+<p style="position:absolute;right:64px;top:40px;width:240px;text-align:right;font-size:24px;color:#8A877C">WF 05/15</p>
+<h2 style="font-size:56px;font-weight:700">oxc のパーサーのファイル構成</h2>
+<div style="display:grid;grid-template-columns:320px 1fr 200px;gap:20px;align-items:center;font-family:'JetBrains Mono', 'Courier New', monospace">
+<p style="font-size:32px">lexer/</p>
+<div style="width:880px;height:44px;background:#D9D7CF"></div>
+<p style="font-size:32px;text-align:right">8,256</p>
+<p style="font-size:32px">js/</p>
+<div style="width:764px;height:44px;background:#D9D7CF"></div>
+<p style="font-size:32px;text-align:right">7,171</p>
+<p style="font-size:32px;font-weight:700;color:#B5600F">ts/</p>
+<div style="width:283px;height:44px;background:#D97A1E"></div>
+<p style="font-size:32px;text-align:right;font-weight:700;color:#B5600F">2,654</p>
+<p style="font-size:32px">jsx/</p>
+<div style="width:62px;height:44px;background:#D9D7CF"></div>
+<p style="font-size:32px;text-align:right">582</p>
+<p style="font-size:32px">共通の部品</p>
+<div style="width:612px;height:44px;background:#D9D7CF"></div>
+<p style="font-size:32px;text-align:right">5,743</p>
+</div>
+<p style="font-size:32px;color:#5A5850">全体 24,406 行 (oxc rev 1aa5ec11ce)</p>
+<p style="font-size:56px;font-weight:700">ts/ は全体の<span style="color:#B5600F">約1割</span></p>
+<aside>oxc のパーサーのファイルはこんな構成です。TypeScript parser を眺めに来たのに、ts/ は全体の1割ほどしかありません。</aside>
+</section>
+
+<section id="s06" style="background:#F5F4EF;color:#1F2328;font-family:'Noto Sans JP', Arial, sans-serif;padding:96px 128px;display:flex;flex-direction:column;gap:32px">
+<p style="position:absolute;right:64px;top:40px;width:240px;text-align:right;font-size:24px;color:#8A877C">WF 06/15</p>
+<h2 style="font-size:48px;font-weight:700"><span style="color:#3E6FA8">a &lt; b &gt; (c);</span> 文法の段ごとの関数を、上から呼び降りる</h2>
+<div style="display:grid;grid-template-columns:780px 390px 1fr;gap:10px;background:#22262B;color:#E8E6DF;border-radius:12px;padding:36px;font-family:'JetBrains Mono', 'Courier New', monospace">
+<p style="font-size:28px">parse_statement_list_item</p>
+<p style="font-size:28px;color:#A8A598">js/statement.rs:131</p>
+<p style="font-size:28px;color:#C9C6BB;font-family:'Noto Sans JP', Arial, sans-serif">文を読む</p>
+<p style="font-size:28px;padding:0 0 0 28px">└ parse_assignment_expression_or_higher</p>
+<p style="font-size:28px;color:#A8A598">js/expression.rs:1479</p>
+<p style="font-size:28px;color:#C9C6BB;font-family:'Noto Sans JP', Arial, sans-serif">式を読む</p>
+<p style="font-size:28px;padding:0 0 0 56px">└ parse_binary_expression_or_higher</p>
+<p style="font-size:28px;color:#A8A598">js/expression.rs:1304</p>
+<p style="font-size:28px;color:#C9C6BB;font-family:'Noto Sans JP', Arial, sans-serif">二項演算を読む</p>
+<p style="font-size:28px;padding:0 0 0 84px">└ parse_lhs_expression_or_higher</p>
+<p style="font-size:28px;color:#A8A598">js/expression.rs:748</p>
+<p style="font-size:28px;color:#C9C6BB;font-family:'Noto Sans JP', Arial, sans-serif">左辺式を読む</p>
+<p style="font-size:28px;padding:0 0 0 112px">└ parse_member_expression_rest</p>
+<p style="font-size:28px;color:#A8A598">js/expression.rs:859</p>
+<p style="font-size:28px;color:#C9C6BB;font-family:'Noto Sans JP', Arial, sans-serif">後置 (. [ ! &lt;) を読む</p>
+<p style="font-size:28px;padding:0 0 0 140px;opacity:0">└ parse_type_arguments_in_expression</p>
+<p style="font-size:28px;color:#A8A598;opacity:0">ts/types.rs:914</p>
+<p style="font-size:28px;color:#C9C6BB;font-family:'Noto Sans JP', Arial, sans-serif;opacity:0">試しに型引数として読む</p>
+<p style="font-size:28px;color:#C9C6BB;font-family:'Noto Sans JP', Arial, sans-serif;padding:0 0 0 84px;grid-column:span 3;opacity:0">← 型引数を持ち帰って、左辺式の段に戻る</p>
+<p style="font-size:28px;padding:0 0 0 112px;opacity:0">└ parse_call_expression_rest</p>
+<p style="font-size:28px;color:#A8A598;opacity:0">js/expression.rs:1091</p>
+<p style="font-size:28px;color:#C9C6BB;font-family:'Noto Sans JP', Arial, sans-serif;opacity:0">呼び出しを組み立てる</p>
+</div>
+<p style="font-size:28px;color:#5A5850">上の段は、下の段を呼んで結果を待つだけ。間の段 (parse_expression_or_labeled_statement など) は省略</p>
+<aside>JS のパーサーは、たいてい再帰下降という作りです。文法の段ごとに関数があって、上の段は下の段を呼んで、結果が返ってくるのを待ちます。a < b > (c); も、文、式、二項演算、と js/ の関数を呼び降りていきます。
+WF メモ: ブログ第1回「降下のはしご」の書き方 (関数 / ファイル:行 / 役割の3列、└ で入れ子) にそろえた。まだ出していない行は透明にして置いてあるので、はしごの枚で行の位置が動かない。</aside>
+</section>
+
+<section id="s07" style="background:#F5F4EF;color:#1F2328;font-family:'Noto Sans JP', Arial, sans-serif;padding:96px 128px;display:flex;flex-direction:column;gap:28px">
+<p style="position:absolute;right:64px;top:40px;width:240px;text-align:right;font-size:24px;color:#8A877C">WF 07/15</p>
+<h2 style="font-size:48px;font-weight:700">後置の段を開く: &lt; の腕から ts/ を呼ぶ</h2>
+<div style="display:flex;flex-direction:column;background:#22262B;color:#E8E6DF;border-radius:12px">
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:24px;color:#E8E6DF;background:#2E333A;border-radius:12px 12px 0 0;padding:10px 24px">js/expression.rs — parse_member_expression_rest</p>
+<div style="display:grid;grid-template-columns:90px 1fr;gap:8px;padding:28px 28px 28px 0;font-family:'JetBrains Mono', 'Courier New', monospace">
+<p style="font-size:28px;color:#6E6B63;text-align:right">867</p>
+<p style="font-size:28px;padding:0 0 0 24px">loop {</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right">872</p>
+<p style="font-size:28px;padding:0 0 0 91px">match self.cur_kind() {</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right">873</p>
+<p style="font-size:28px;padding:0 0 0 158px">Kind::Dot =&gt; { … }</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right">878</p>
+<p style="font-size:28px;padding:0 0 0 158px">Kind::QuestionDot if allow_optional_chain =&gt; { … }</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right">908</p>
+<p style="font-size:28px;padding:0 0 0 158px">Kind::LBrack if !self.ctx.has_decorator() =&gt; { … }</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right">912</p>
+<p style="font-size:28px;padding:0 0 0 158px">kind if kind.is_template_start_of_tagged_template() =&gt; { … }</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right">915</p>
+<p style="font-size:28px;padding:0 0 0 158px">Kind::Bang if self.is_ts &amp;&amp; !self.cur_token().is_on_new_line() =&gt; { … }</p>
+<p style="font-size:28px;color:#FFFFFF;text-align:right;background:#4A4F57">920</p>
+<p style="font-size:28px;padding:0 0 0 158px;background:#4A4F57;color:#FFFFFF;font-weight:700">Kind::LAngle | Kind::ShiftLeft if self.is_ts =&gt; {</p>
+<p style="font-size:28px;color:#FFFFFF;text-align:right;background:#4A4F57">921</p>
+<p style="font-size:28px;padding:0 0 0 225px;background:#4A4F57;color:#FFFFFF;font-weight:700">if let Some(arguments) = self.parse_type_arguments_in_expression() {</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right"></p>
+<p style="font-size:28px;padding:0 0 0 292px;color:#8E8B82">…</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right">937</p>
+<p style="font-size:28px;padding:0 0 0 158px">_ =&gt; return lhs,</p>
+</div>
+</div>
+<p style="font-size:28px;color:#5A5850">. や [ と同じ match に、&lt; の腕が並んでいる。{ … } は中身を省略</p>
+<aside>後置を読むこの関数は、. や [ を1つずつ見ていくループです。その中に < の腕があって、ここから ts/ の関数を呼びます。
+WF メモ: 腕の if self.is_ts には、ここではまだ触れない。14枚目で同じ画面に戻ってきて回収する。抜粋は oxc rev 1aa5ec11ce から原文どおり (腕の中身だけ { … } に畳んだ)。</aside>
+</section>
+
+<section id="s08" style="background:#F5F4EF;color:#1F2328;font-family:'Noto Sans JP', Arial, sans-serif;padding:96px 128px;display:flex;flex-direction:column;gap:32px">
+<p style="position:absolute;right:64px;top:40px;width:240px;text-align:right;font-size:24px;color:#8A877C">WF 08/15</p>
+<h2 style="font-size:48px;font-weight:700"><span style="color:#3E6FA8">a &lt; b &gt; (c);</span> 一段深く ts/ に入る</h2>
+<div style="display:grid;grid-template-columns:780px 390px 1fr;gap:10px;background:#22262B;color:#E8E6DF;border-radius:12px;padding:36px;font-family:'JetBrains Mono', 'Courier New', monospace">
+<p style="font-size:28px">parse_statement_list_item</p>
+<p style="font-size:28px;color:#A8A598">js/statement.rs:131</p>
+<p style="font-size:28px;color:#C9C6BB;font-family:'Noto Sans JP', Arial, sans-serif">文を読む</p>
+<p style="font-size:28px;padding:0 0 0 28px">└ parse_assignment_expression_or_higher</p>
+<p style="font-size:28px;color:#A8A598">js/expression.rs:1479</p>
+<p style="font-size:28px;color:#C9C6BB;font-family:'Noto Sans JP', Arial, sans-serif">式を読む</p>
+<p style="font-size:28px;padding:0 0 0 56px">└ parse_binary_expression_or_higher</p>
+<p style="font-size:28px;color:#A8A598">js/expression.rs:1304</p>
+<p style="font-size:28px;color:#C9C6BB;font-family:'Noto Sans JP', Arial, sans-serif">二項演算を読む</p>
+<p style="font-size:28px;padding:0 0 0 84px">└ parse_lhs_expression_or_higher</p>
+<p style="font-size:28px;color:#A8A598">js/expression.rs:748</p>
+<p style="font-size:28px;color:#C9C6BB;font-family:'Noto Sans JP', Arial, sans-serif">左辺式を読む</p>
+<p style="font-size:28px;padding:0 0 0 112px">└ parse_member_expression_rest</p>
+<p style="font-size:28px;color:#A8A598">js/expression.rs:859</p>
+<p style="font-size:28px;color:#C9C6BB;font-family:'Noto Sans JP', Arial, sans-serif">後置 (. [ ! &lt;) を読む</p>
+<p style="font-size:28px;padding:0 0 0 140px;background:#3A3F46;font-weight:700;color:#FFFFFF">└ parse_type_arguments_in_expression</p>
+<p style="font-size:28px;color:#FFFFFF;background:#3A3F46;font-weight:700">ts/types.rs:914</p>
+<p style="font-size:28px;color:#FFFFFF;background:#3A3F46;font-weight:700;font-family:'Noto Sans JP', Arial, sans-serif">試しに型引数として読む</p>
+<p style="font-size:28px;color:#C9C6BB;font-family:'Noto Sans JP', Arial, sans-serif;padding:0 0 0 84px;grid-column:span 3;opacity:0">← 型引数を持ち帰って、左辺式の段に戻る</p>
+<p style="font-size:28px;padding:0 0 0 112px;opacity:0">└ parse_call_expression_rest</p>
+<p style="font-size:28px;color:#A8A598;opacity:0">js/expression.rs:1091</p>
+<p style="font-size:28px;color:#C9C6BB;font-family:'Noto Sans JP', Arial, sans-serif;opacity:0">呼び出しを組み立てる</p>
+</div>
+<p style="font-size:32px;font-weight:700">入る前に checkpoint: 今読んでいるトークンの位置を保存</p>
+<aside>一段深く、初めて ts/ に入りました。試しに型引数として読んでみます。読み始める前に、だめだったときに戻ってこられるよう、checkpoint で今読んでいるトークンの位置を保存しておきます。</aside>
+</section>
+
+<section id="s09" style="background:#F5F4EF;color:#1F2328;font-family:'Noto Sans JP', Arial, sans-serif;padding:96px 128px;display:flex;flex-direction:column;gap:28px">
+<p style="position:absolute;right:64px;top:40px;width:240px;text-align:right;font-size:24px;color:#8A877C">WF 09/15</p>
+<h2 style="font-size:48px;font-weight:700">認めるかどうか: 閉じた &gt; の直後の1トークン</h2>
+<div style="display:flex;flex-direction:column;background:#22262B;color:#E8E6DF;border-radius:12px">
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:24px;color:#E8E6DF;background:#2E333A;border-radius:12px 12px 0 0;padding:10px 24px">ts/types.rs — can_follow_type_arguments_in_expr</p>
+<div style="display:grid;grid-template-columns:90px 1fr;gap:8px;padding:28px 28px 28px 0;font-family:'JetBrains Mono', 'Courier New', monospace">
+<p style="font-size:28px;color:#6E6B63;text-align:right">955</p>
+<p style="font-size:28px;padding:0 0 0 24px">fn can_follow_type_arguments_in_expr(&amp;mut self) -&gt; bool {</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right">956</p>
+<p style="font-size:28px;padding:0 0 0 91px">match self.cur_kind() {</p>
+<p style="font-size:28px;color:#FFFFFF;text-align:right;background:#4A4F57">957</p>
+<p style="font-size:28px;padding:0 0 0 158px;background:#4A4F57;color:#FFFFFF;font-weight:700">Kind::LParen | Kind::NoSubstitutionTemplate | Kind::TemplateHead =&gt; true,</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right">958</p>
+<p style="font-size:28px;padding:0 0 0 158px">Kind::LAngle | Kind::RAngle | Kind::Plus | Kind::Minus =&gt; false,</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right">959</p>
+<p style="font-size:28px;padding:0 0 0 158px">_ =&gt; {</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right">960</p>
+<p style="font-size:28px;padding:0 0 0 225px">self.cur_token().is_on_new_line()</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right">961</p>
+<p style="font-size:28px;padding:0 0 0 292px">|| self.is_binary_operator()</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right">962</p>
+<p style="font-size:28px;padding:0 0 0 292px">|| !self.is_start_of_expression()</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right">963</p>
+<p style="font-size:28px;padding:0 0 0 158px">}</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right">964</p>
+<p style="font-size:28px;padding:0 0 0 91px">}</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right">965</p>
+<p style="font-size:28px;padding:0 0 0 24px">}</p>
+</div>
+</div>
+<p style="font-size:32px;font-weight:700"><span style="color:#3E6FA8">a &lt; b &gt; (c);</span> は直後が ( なので true</p>
+<aside>型引数を読み終えたら、閉じた > の直後の1トークンを見ます。( なら true。型引数として認めます。
+WF メモ: 関数まるごと原文どおり (oxc rev 1aa5ec11ce)。11枚目で a < b > c; のときに 962 行目を使う。</aside>
+</section>
+
+<section id="s10" style="background:#F5F4EF;color:#1F2328;font-family:'Noto Sans JP', Arial, sans-serif;padding:96px 128px;display:flex;flex-direction:column;gap:32px">
+<p style="position:absolute;right:64px;top:40px;width:240px;text-align:right;font-size:24px;color:#8A877C">WF 10/15</p>
+<h2 style="font-size:48px;font-weight:700"><span style="color:#3E6FA8">a &lt; b &gt; (c);</span> 持ち帰って、js/ で呼び出しに</h2>
+<div style="display:grid;grid-template-columns:780px 390px 1fr;gap:10px;background:#22262B;color:#E8E6DF;border-radius:12px;padding:36px;font-family:'JetBrains Mono', 'Courier New', monospace">
+<p style="font-size:28px">parse_statement_list_item</p>
+<p style="font-size:28px;color:#A8A598">js/statement.rs:131</p>
+<p style="font-size:28px;color:#C9C6BB;font-family:'Noto Sans JP', Arial, sans-serif">文を読む</p>
+<p style="font-size:28px;padding:0 0 0 28px">└ parse_assignment_expression_or_higher</p>
+<p style="font-size:28px;color:#A8A598">js/expression.rs:1479</p>
+<p style="font-size:28px;color:#C9C6BB;font-family:'Noto Sans JP', Arial, sans-serif">式を読む</p>
+<p style="font-size:28px;padding:0 0 0 56px">└ parse_binary_expression_or_higher</p>
+<p style="font-size:28px;color:#A8A598">js/expression.rs:1304</p>
+<p style="font-size:28px;color:#C9C6BB;font-family:'Noto Sans JP', Arial, sans-serif">二項演算を読む</p>
+<p style="font-size:28px;padding:0 0 0 84px">└ parse_lhs_expression_or_higher</p>
+<p style="font-size:28px;color:#A8A598">js/expression.rs:748</p>
+<p style="font-size:28px;color:#C9C6BB;font-family:'Noto Sans JP', Arial, sans-serif">左辺式を読む</p>
+<p style="font-size:28px;padding:0 0 0 112px">└ parse_member_expression_rest</p>
+<p style="font-size:28px;color:#A8A598">js/expression.rs:859</p>
+<p style="font-size:28px;color:#C9C6BB;font-family:'Noto Sans JP', Arial, sans-serif">後置 (. [ ! &lt;) を読む</p>
+<p style="font-size:28px;padding:0 0 0 140px">└ parse_type_arguments_in_expression</p>
+<p style="font-size:28px;color:#A8A598">ts/types.rs:914</p>
+<p style="font-size:28px;color:#C9C6BB;font-family:'Noto Sans JP', Arial, sans-serif">試しに型引数として読む</p>
+<p style="font-size:28px;color:#FFFFFF;font-weight:700;background:#3A3F46;font-family:'Noto Sans JP', Arial, sans-serif;padding:0 0 0 84px;grid-column:span 3">← 型引数を持ち帰って、左辺式の段に戻る</p>
+<p style="font-size:28px;padding:0 0 0 112px;background:#3A3F46;font-weight:700;color:#FFFFFF">└ parse_call_expression_rest</p>
+<p style="font-size:28px;color:#FFFFFF;background:#3A3F46;font-weight:700">js/expression.rs:1091</p>
+<p style="font-size:28px;color:#FFFFFF;background:#3A3F46;font-weight:700;font-family:'Noto Sans JP', Arial, sans-serif">呼び出しを組み立てる</p>
+</div>
+<p style="font-size:32px;color:#5A5850"><span style="color:#8A4FB0">a &lt; b &gt; c;</span> も、ts/ の段までは同じ道</p>
+<aside>認められたので、型引数を持ち帰って一段上に戻り、js/ の関数が呼び出しとして組み立てます。JS のパーサーが式を読んでいる途中に、TS が食い込んでいるんですね。a < b > c; も、ここまでは同じ道です。
+WF メモ: 旧10枚目 (a < b > c; の同じ道) は、最後の一言に吸収した。</aside>
+</section>
+
+<section id="s11" style="background:#F5F4EF;color:#1F2328;font-family:'Noto Sans JP', Arial, sans-serif;padding:96px 128px;display:flex;flex-direction:column;gap:28px">
+<p style="position:absolute;right:64px;top:40px;width:240px;text-align:right;font-size:24px;color:#8A877C">WF 11/15</p>
+<h2 style="font-size:48px;font-weight:700"><span style="color:#8A4FB0">a &lt; b &gt; c;</span> 直後が c なので false → rewind</h2>
+<div style="display:flex;flex-direction:column;background:#22262B;color:#E8E6DF;border-radius:12px">
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:24px;color:#E8E6DF;background:#2E333A;border-radius:12px 12px 0 0;padding:10px 24px">ts/types.rs — parse_type_arguments_in_expression</p>
+<div style="display:grid;grid-template-columns:90px 1fr;gap:8px;padding:28px 28px 28px 0;font-family:'JetBrains Mono', 'Courier New', monospace">
+<p style="font-size:28px;color:#6E6B63;text-align:right">927</p>
+<p style="font-size:28px;padding:0 0 0 24px">let checkpoint = self.checkpoint();</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right"></p>
+<p style="font-size:28px;padding:0 0 0 24px;color:#8E8B82">…</p>
+<p style="font-size:28px;color:#FFFFFF;text-align:right;background:#4A4F57">944</p>
+<p style="font-size:28px;padding:0 0 0 24px;background:#4A4F57;color:#FFFFFF;font-weight:700">if self.fatal_error.is_some() || !self.can_follow_type_arguments_in_expr() {</p>
+<p style="font-size:28px;color:#FFFFFF;text-align:right;background:#4A4F57">945</p>
+<p style="font-size:28px;padding:0 0 0 91px;background:#4A4F57;color:#FFFFFF;font-weight:700">self.rewind(checkpoint);</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right">946</p>
+<p style="font-size:28px;padding:0 0 0 91px">return None;</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right">947</p>
+<p style="font-size:28px;padding:0 0 0 24px">}</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right"></p>
+<p style="font-size:28px;padding:0 0 0 24px;color:#8E8B82">…</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right">952</p>
+<p style="font-size:28px;padding:0 0 0 24px">Some(TSTypeParameterInstantiation::boxed(span, params, self))</p>
+</div>
+</div>
+<p style="font-size:30px;color:#5A5850">c は式の始まり → 9枚目の 962 行目 !self.is_start_of_expression() が false → 927 行目で保存した位置へ rewind</p>
+<aside>a < b > c; では、閉じた > の直後が c です。式が始まってしまうので、さっきの関数は false。すると、最初に checkpoint で保存しておいた位置に rewind して、None を返します。
+WF メモ: 927 行目の checkpoint は8枚目の「入る前に保存」、945 行目の rewind がその対。抜粋は oxc rev 1aa5ec11ce から原文どおり。</aside>
+</section>
+
+<section id="s12" style="background:#F5F4EF;color:#1F2328;font-family:'Noto Sans JP', Arial, sans-serif;padding:96px 128px;display:flex;flex-direction:column;gap:32px">
+<p style="position:absolute;right:64px;top:40px;width:240px;text-align:right;font-size:24px;color:#8A877C">WF 12/15</p>
+<h2 style="font-size:48px;font-weight:700"><span style="color:#8A4FB0">a &lt; b &gt; c;</span> 二段戻って、比較として読み直す</h2>
+<div style="display:grid;grid-template-columns:780px 390px 1fr;gap:10px;background:#22262B;color:#E8E6DF;border-radius:12px;padding:36px;font-family:'JetBrains Mono', 'Courier New', monospace">
+<p style="font-size:28px">parse_statement_list_item</p>
+<p style="font-size:28px;color:#A8A598">js/statement.rs:131</p>
+<p style="font-size:28px;color:#C9C6BB;font-family:'Noto Sans JP', Arial, sans-serif">文を読む</p>
+<p style="font-size:28px;padding:0 0 0 28px">└ parse_assignment_expression_or_higher</p>
+<p style="font-size:28px;color:#A8A598">js/expression.rs:1479</p>
+<p style="font-size:28px;color:#C9C6BB;font-family:'Noto Sans JP', Arial, sans-serif">式を読む</p>
+<p style="font-size:28px;padding:0 0 0 56px">└ parse_binary_expression_or_higher</p>
+<p style="font-size:28px;color:#A8A598">js/expression.rs:1304</p>
+<p style="font-size:28px;color:#C9C6BB;font-family:'Noto Sans JP', Arial, sans-serif">二項演算を読む</p>
+<p style="font-size:28px;padding:0 0 0 84px">└ parse_lhs_expression_or_higher</p>
+<p style="font-size:28px;color:#A8A598">js/expression.rs:748</p>
+<p style="font-size:28px;color:#C9C6BB;font-family:'Noto Sans JP', Arial, sans-serif">左辺式を読む</p>
+<p style="font-size:28px;padding:0 0 0 112px">└ parse_member_expression_rest</p>
+<p style="font-size:28px;color:#A8A598">js/expression.rs:859</p>
+<p style="font-size:28px;color:#C9C6BB;font-family:'Noto Sans JP', Arial, sans-serif">後置 (. [ ! &lt;) を読む</p>
+<p style="font-size:28px;padding:0 0 0 140px;text-decoration:line-through;color:#8E8B82">└ parse_type_arguments_in_expression</p>
+<p style="font-size:28px;color:#8E8B82;text-decoration:line-through">ts/types.rs:914</p>
+<p style="font-size:28px;color:#8E8B82;font-family:'Noto Sans JP', Arial, sans-serif">読めたのに、却下</p>
+<p style="font-size:28px;color:#FFFFFF;font-weight:700;background:#3A3F46;font-family:'Noto Sans JP', Arial, sans-serif;padding:0 0 0 56px;grid-column:span 3">← &lt; の手前に戻り、a だけを持ち帰って二項演算の段へ</p>
+<p style="font-size:28px;padding:0 0 0 84px;background:#3A3F46;font-weight:700;color:#FFFFFF">└ parse_binary_expression_rest</p>
+<p style="font-size:28px;color:#FFFFFF;background:#3A3F46;font-weight:700">js/expression.rs:1322</p>
+<p style="font-size:28px;color:#FFFFFF;background:#3A3F46;font-weight:700;font-family:'Noto Sans JP', Arial, sans-serif">&lt; を比較として読む</p>
+</div>
+<p style="font-size:32px;color:#5A5850">b は2回読まれる: 1回目は型、2回目は式</p>
+<aside>型引数としては読めたのに、認められませんでした。a だけを持ち帰って二段上がり、二項演算の段が < を比較として読み直します。b は2回読まれます。1回目は型として、2回目は式として。</aside>
+</section>
+
+<section id="s13" style="background:#F5F4EF;color:#1F2328;font-family:'Noto Sans JP', Arial, sans-serif;padding:96px 128px;display:flex;flex-direction:column;gap:32px">
+<p style="position:absolute;right:64px;top:40px;width:240px;text-align:right;font-size:24px;color:#8A877C">WF 13/15</p>
+<h2 style="font-size:48px;font-weight:700">どこからが TS? <span style="color:#B5600F">ts/</span> の段に色を塗る</h2>
+<div style="display:grid;grid-template-columns:780px 390px 1fr;gap:10px;background:#22262B;color:#E8E6DF;border-radius:12px;padding:36px;font-family:'JetBrains Mono', 'Courier New', monospace">
+<p style="font-size:28px">parse_statement_list_item</p>
+<p style="font-size:28px;color:#8FB3DE">js/statement.rs:131</p>
+<p style="font-size:28px;color:#C9C6BB;font-family:'Noto Sans JP', Arial, sans-serif">文を読む</p>
+<p style="font-size:28px;padding:0 0 0 28px">└ parse_assignment_expression_or_higher</p>
+<p style="font-size:28px;color:#8FB3DE">js/expression.rs:1479</p>
+<p style="font-size:28px;color:#C9C6BB;font-family:'Noto Sans JP', Arial, sans-serif">式を読む</p>
+<p style="font-size:28px;padding:0 0 0 56px">└ parse_binary_expression_or_higher</p>
+<p style="font-size:28px;color:#8FB3DE">js/expression.rs:1304</p>
+<p style="font-size:28px;color:#C9C6BB;font-family:'Noto Sans JP', Arial, sans-serif">二項演算を読む</p>
+<p style="font-size:28px;padding:0 0 0 84px">└ parse_lhs_expression_or_higher</p>
+<p style="font-size:28px;color:#8FB3DE">js/expression.rs:748</p>
+<p style="font-size:28px;color:#C9C6BB;font-family:'Noto Sans JP', Arial, sans-serif">左辺式を読む</p>
+<p style="font-size:28px;padding:0 0 0 112px">└ parse_member_expression_rest</p>
+<p style="font-size:28px;color:#8FB3DE">js/expression.rs:859</p>
+<p style="font-size:28px;color:#C9C6BB;font-family:'Noto Sans JP', Arial, sans-serif">後置 (. [ ! &lt;) を読む</p>
+<p style="font-size:28px;padding:0 0 0 140px;background:#6B3F12;color:#FFD3A1;font-weight:700">└ parse_type_arguments_in_expression</p>
+<p style="font-size:28px;background:#6B3F12;color:#FFD3A1;font-weight:700">ts/types.rs:914</p>
+<p style="font-size:28px;background:#6B3F12;color:#FFD3A1;font-weight:700;font-family:'Noto Sans JP', Arial, sans-serif">試しに型引数として読む</p>
+<p style="font-size:28px;padding:0 0 0 112px">└ parse_call_expression_rest</p>
+<p style="font-size:28px;color:#8FB3DE">js/expression.rs:1091</p>
+<p style="font-size:28px;color:#C9C6BB;font-family:'Noto Sans JP', Arial, sans-serif">(c) なら呼び出しに</p>
+<p style="font-size:28px;padding:0 0 0 84px">└ parse_binary_expression_rest</p>
+<p style="font-size:28px;color:#8FB3DE">js/expression.rs:1322</p>
+<p style="font-size:28px;color:#C9C6BB;font-family:'Noto Sans JP', Arial, sans-serif">c なら比較に</p>
+</div>
+<p style="font-size:32px;font-weight:700">TS だったのは、一番深いこの1段だけ</p>
+<aside>ところで、今日は TypeScript parser を眺めに来たんでした。TS の段に色を塗るとこうなります。TS だったのは、一番深いこの1段だけ。入るのも戻るのも js/ の関数で、ts/ は JS のパーサーから呼ばれる部品でした。
+WF メモ: 2つの文の道を1つのはしごにまとめた (最後の2行が分かれ道)。</aside>
+</section>
+
+<section id="s14" style="background:#F5F4EF;color:#1F2328;font-family:'Noto Sans JP', Arial, sans-serif;padding:96px 128px;display:flex;flex-direction:column;gap:28px">
+<p style="position:absolute;right:64px;top:40px;width:240px;text-align:right;font-size:24px;color:#8A877C">WF 14/15</p>
+<h2 style="font-size:48px;font-weight:700">もう一度、後置の段: 境界は if self.is_ts</h2>
+<div style="display:flex;flex-direction:column;background:#22262B;color:#E8E6DF;border-radius:12px">
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:24px;color:#E8E6DF;background:#2E333A;border-radius:12px 12px 0 0;padding:10px 24px">js/expression.rs — parse_member_expression_rest</p>
+<div style="display:grid;grid-template-columns:90px 1fr;gap:8px;padding:28px 28px 28px 0;font-family:'JetBrains Mono', 'Courier New', monospace">
+<p style="font-size:28px;color:#6E6B63;text-align:right">867</p>
+<p style="font-size:28px;padding:0 0 0 24px">loop {</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right">872</p>
+<p style="font-size:28px;padding:0 0 0 91px">match self.cur_kind() {</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right">873</p>
+<p style="font-size:28px;padding:0 0 0 158px">Kind::Dot =&gt; { … }</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right">878</p>
+<p style="font-size:28px;padding:0 0 0 158px">Kind::QuestionDot if allow_optional_chain =&gt; { … }</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right">908</p>
+<p style="font-size:28px;padding:0 0 0 158px">Kind::LBrack if !self.ctx.has_decorator() =&gt; { … }</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right">912</p>
+<p style="font-size:28px;padding:0 0 0 158px">kind if kind.is_template_start_of_tagged_template() =&gt; { … }</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right">915</p>
+<p style="font-size:28px;padding:0 0 0 158px">Kind::Bang <span style="color:#FFB566">if self.is_ts</span> &amp;&amp; !self.cur_token().is_on_new_line() =&gt; { … }</p>
+<p style="font-size:28px;color:#FFFFFF;text-align:right;background:#4A4F57">920</p>
+<p style="font-size:28px;padding:0 0 0 158px;background:#4A4F57;color:#FFFFFF;font-weight:700">Kind::LAngle | Kind::ShiftLeft <span style="color:#FFB566">if self.is_ts</span> =&gt; {</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right">921</p>
+<p style="font-size:28px;padding:0 0 0 225px">if let Some(arguments) = self.parse_type_arguments_in_expression() {</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right"></p>
+<p style="font-size:28px;padding:0 0 0 292px;color:#8E8B82">…</p>
+<p style="font-size:28px;color:#FFFFFF;text-align:right;background:#4A4F57">937</p>
+<p style="font-size:28px;padding:0 0 0 158px;background:#4A4F57;color:#FFFFFF;font-weight:700">_ =&gt; return lhs,</p>
+</div>
+</div>
+<div style="display:flex;flex-direction:row;gap:48px">
+<p style="font-size:30px;font-weight:700;width:760px">is_ts を見ている場所: パーサー全体で54か所</p>
+<p style="font-size:30px;font-weight:700">.js なら 937 行目で抜ける → (a &lt; b) &gt; (c)</p>
+</div>
+<aside>最初に見たこの腕、もう一度見てください。if self.is_ts が付いています。TS のファイルのときだけ、この腕に入る。これが JS と TS の境界です。このフラグを見ている場所は、パーサー全体で54か所あります。.js なら、ここに入らずに最後の腕で抜けて、a < b > (c); もただの比較になります。
+WF メモ: 7枚目と同じ画面に戻ってくる。is_ts だけ色を変え、920 行目と 937 行目をハイライト。</aside>
+</section>
+
+<section id="s15" style="background:#1F2328;color:#F5F4EF;font-family:'Noto Sans JP', Arial, sans-serif;padding:128px;display:flex;flex-direction:column;justify-content:center;gap:48px">
+<p style="position:absolute;right:64px;top:40px;width:240px;text-align:right;font-size:24px;color:#A8A598">WF 15/15</p>
+<p style="font-size:56px;color:#C9C6BB">TypeScript parser は無かった。</p>
+<h1 style="font-size:96px;font-weight:700;line-height:1.2">TS は JS の中に<br>住んでいる</h1>
+<aside>まとめです。TS は、JS のパーサーが式を読む途中に食い込んでいました。ts/ は、そこから呼ばれる部品でした。境界は is_ts というフラグ1つだけ。TypeScript parser というものは無かった。TS は JS の中に住んでいる、というのが今日眺めて分かったことです。(時間の調整はここの気づきを並べ直す部分で)</aside>
+</section>
+
+</div>
+<div id="notes"></div>
+<div id="page"></div>
+<script>
+const slides = [...document.querySelectorAll('#stage > section')];
+const notes = document.getElementById('notes');
+const page = document.getElementById('page');
+let i = Math.max(0, Math.min(slides.length - 1, (parseInt(location.hash.slice(1)) || 1) - 1));
+function fit() {
+  const s = Math.min(innerWidth / 1920, innerHeight / 1080);
+  document.getElementById('stage').style.transform = `translate(-50%, -50%) scale(${s})`;
+}
+function show(n) {
+  i = Math.max(0, Math.min(slides.length - 1, n));
+  slides.forEach((el, k) => el.classList.toggle('current', k === i));
+  const aside = slides[i].querySelector('aside');
+  notes.textContent = aside ? aside.textContent.trim() : '';
+  page.textContent = `${i + 1} / ${slides.length}`;
+  history.replaceState(null, '', `#${i + 1}`);
+}
+addEventListener('resize', fit);
+addEventListener('keydown', (e) => {
+  if (['ArrowRight', 'ArrowDown', 'PageDown', ' '].includes(e.key)) show(i + 1);
+  else if (['ArrowLeft', 'ArrowUp', 'PageUp'].includes(e.key)) show(i - 1);
+  else if (e.key === 'n') notes.classList.toggle('show');
+});
+document.getElementById('stage').addEventListener('click', () => show(i + 1));
+fit();
+show(i);
+</script>
+</body>
+</html>

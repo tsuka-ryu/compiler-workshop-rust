@@ -1,0 +1,51 @@
+<section id="s04" style="background:#F5F4EF;color:#1F2328;font-family:'Noto Sans JP', Arial, sans-serif;padding:96px 128px;display:flex;flex-direction:column;gap:28px">
+<p style="position:absolute;right:64px;top:40px;width:240px;text-align:right;font-size:24px;color:#8A877C">WF 04/15</p>
+<h2 style="font-size:48px;font-weight:700">トークンはほぼ同じ、木はまったく違う</h2>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:48px">
+<div style="display:flex;flex-direction:column;gap:16px">
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:44px;font-weight:700">a &lt; b &gt; (c);</p>
+<p style="font-size:24px;color:#6B6960">↓ レキサー</p>
+<div style="display:flex;flex-direction:row;gap:10px;font-family:'JetBrains Mono', 'Courier New', monospace">
+<p style="font-size:30px;background:#FFFFFF;border:2px solid #6B6960;border-radius:8px;padding:4px 14px">a</p>
+<p style="font-size:30px;background:#FFFFFF;border:2px solid #6B6960;border-radius:8px;padding:4px 14px">&lt;</p>
+<p style="font-size:30px;background:#FFFFFF;border:2px solid #6B6960;border-radius:8px;padding:4px 14px">b</p>
+<p style="font-size:30px;background:#FFFFFF;border:2px solid #6B6960;border-radius:8px;padding:4px 14px">&gt;</p>
+<p style="font-size:30px;background:#FBE3C8;border:3px solid #D97A1E;border-radius:8px;padding:4px 14px">(</p>
+<p style="font-size:30px;background:#FFFFFF;border:2px solid #6B6960;border-radius:8px;padding:4px 14px">c</p>
+<p style="font-size:30px;background:#FBE3C8;border:3px solid #D97A1E;border-radius:8px;padding:4px 14px">)</p>
+<p style="font-size:30px;background:#FFFFFF;border:2px solid #6B6960;border-radius:8px;padding:4px 14px">;</p>
+</div>
+<p style="font-size:24px;color:#6B6960">↓ パーサー</p>
+<div style="display:flex;flex-direction:column;gap:4px;background:#FFFFFF;border:2px solid #6B6960;border-radius:8px;padding:20px;font-family:'JetBrains Mono', 'Courier New', monospace">
+<p style="font-size:26px;font-weight:700">CallExpression</p>
+<p style="font-size:26px;padding:0 0 0 32px">callee: Identifier "a"</p>
+<p style="font-size:26px;padding:0 0 0 32px;background:#FBE3C8">typeArguments: TSTypeParameterInstantiation</p>
+<p style="font-size:26px;padding:0 0 0 64px;background:#FBE3C8">params: [TSTypeReference "b"]</p>
+<p style="font-size:26px;padding:0 0 0 32px">arguments: [Identifier "c"]</p>
+</div>
+</div>
+<div style="display:flex;flex-direction:column;gap:16px">
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:44px;font-weight:700">a &lt; b &gt; c;</p>
+<p style="font-size:24px;color:#6B6960">↓ レキサー</p>
+<div style="display:flex;flex-direction:row;gap:10px;font-family:'JetBrains Mono', 'Courier New', monospace">
+<p style="font-size:30px;background:#FFFFFF;border:2px solid #6B6960;border-radius:8px;padding:4px 14px">a</p>
+<p style="font-size:30px;background:#FFFFFF;border:2px solid #6B6960;border-radius:8px;padding:4px 14px">&lt;</p>
+<p style="font-size:30px;background:#FFFFFF;border:2px solid #6B6960;border-radius:8px;padding:4px 14px">b</p>
+<p style="font-size:30px;background:#FFFFFF;border:2px solid #6B6960;border-radius:8px;padding:4px 14px">&gt;</p>
+<p style="font-size:30px;background:#FFFFFF;border:2px solid #6B6960;border-radius:8px;padding:4px 14px">c</p>
+<p style="font-size:30px;background:#FFFFFF;border:2px solid #6B6960;border-radius:8px;padding:4px 14px">;</p>
+</div>
+<p style="font-size:24px;color:#6B6960">↓ パーサー</p>
+<div style="display:flex;flex-direction:column;gap:4px;background:#FFFFFF;border:2px solid #6B6960;border-radius:8px;padding:20px;font-family:'JetBrains Mono', 'Courier New', monospace">
+<p style="font-size:26px;font-weight:700">BinaryExpression "&gt;"</p>
+<p style="font-size:26px;padding:0 0 0 32px">left: BinaryExpression "&lt;"</p>
+<p style="font-size:26px;padding:0 0 0 64px">left: Identifier "a"</p>
+<p style="font-size:26px;padding:0 0 0 64px">right: Identifier "b"</p>
+<p style="font-size:26px;padding:0 0 0 32px">right: Identifier "c"</p>
+</div>
+</div>
+</div>
+<p style="font-size:30px;color:#5A5850">JS として読むと <span style="color:#1F2328">a &lt; b &gt; (c);</span> も比較 <span style="color:#1F2328">(a &lt; b) &gt; (c)</span>。どう見分ける? 境界はどこ?</p>
+<aside>パーサーは、レキサーが切ったトークンを読んで、AST という木にします。トークンは括弧以外まったく同じなのに、木はまったく違います。しかもこの a < b > (c);、JS として読むとただの比較です。パーサーはどうやって見分けているのか。JS と TS の境界はどこにあるのか。それを見ていきます。
+WF メモ: 旧4枚目 (トークン) と旧5枚目 (AST) を1枚にまとめた。</aside>
+</section>

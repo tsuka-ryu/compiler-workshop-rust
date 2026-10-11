@@ -1,0 +1,34 @@
+<section id="s09" style="background:#F5F4EF;color:#1F2328;font-family:'Noto Sans JP', Arial, sans-serif;padding:96px 128px;display:flex;flex-direction:column;gap:28px">
+<p style="position:absolute;right:64px;top:40px;width:240px;text-align:right;font-size:24px;color:#8A877C">WF 09/15</p>
+<h2 style="font-size:48px;font-weight:700">認めるかどうか: 閉じた &gt; の直後の1トークン</h2>
+<div style="display:flex;flex-direction:column;background:#22262B;color:#E8E6DF;border-radius:12px">
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:24px;color:#E8E6DF;background:#2E333A;border-radius:12px 12px 0 0;padding:10px 24px">ts/types.rs — can_follow_type_arguments_in_expr</p>
+<div style="display:grid;grid-template-columns:90px 1fr;gap:8px;padding:28px 28px 28px 0;font-family:'JetBrains Mono', 'Courier New', monospace">
+<p style="font-size:28px;color:#6E6B63;text-align:right">955</p>
+<p style="font-size:28px;padding:0 0 0 24px">fn can_follow_type_arguments_in_expr(&amp;mut self) -&gt; bool {</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right">956</p>
+<p style="font-size:28px;padding:0 0 0 91px">match self.cur_kind() {</p>
+<p style="font-size:28px;color:#FFFFFF;text-align:right;background:#4A4F57">957</p>
+<p style="font-size:28px;padding:0 0 0 158px;background:#4A4F57;color:#FFFFFF;font-weight:700">Kind::LParen | Kind::NoSubstitutionTemplate | Kind::TemplateHead =&gt; true,</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right">958</p>
+<p style="font-size:28px;padding:0 0 0 158px">Kind::LAngle | Kind::RAngle | Kind::Plus | Kind::Minus =&gt; false,</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right">959</p>
+<p style="font-size:28px;padding:0 0 0 158px">_ =&gt; {</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right">960</p>
+<p style="font-size:28px;padding:0 0 0 225px">self.cur_token().is_on_new_line()</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right">961</p>
+<p style="font-size:28px;padding:0 0 0 292px">|| self.is_binary_operator()</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right">962</p>
+<p style="font-size:28px;padding:0 0 0 292px">|| !self.is_start_of_expression()</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right">963</p>
+<p style="font-size:28px;padding:0 0 0 158px">}</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right">964</p>
+<p style="font-size:28px;padding:0 0 0 91px">}</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right">965</p>
+<p style="font-size:28px;padding:0 0 0 24px">}</p>
+</div>
+</div>
+<p style="font-size:32px;font-weight:700"><span style="color:#3E6FA8">a &lt; b &gt; (c);</span> は直後が ( なので true</p>
+<aside>型引数を読み終えたら、閉じた > の直後の1トークンを見ます。( なら true。型引数として認めます。
+WF メモ: 関数まるごと原文どおり (oxc rev 1aa5ec11ce)。11枚目で a < b > c; のときに 962 行目を使う。</aside>
+</section>

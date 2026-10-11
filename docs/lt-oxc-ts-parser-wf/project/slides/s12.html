@@ -1,0 +1,30 @@
+<section id="s12" style="background:#F5F4EF;color:#1F2328;font-family:'Noto Sans JP', Arial, sans-serif;padding:96px 128px;display:flex;flex-direction:column;gap:32px">
+<p style="position:absolute;right:64px;top:40px;width:240px;text-align:right;font-size:24px;color:#8A877C">WF 12/15</p>
+<h2 style="font-size:48px;font-weight:700"><span style="color:#8A4FB0">a &lt; b &gt; c;</span> 二段戻って、比較として読み直す</h2>
+<div style="display:grid;grid-template-columns:780px 390px 1fr;gap:10px;background:#22262B;color:#E8E6DF;border-radius:12px;padding:36px;font-family:'JetBrains Mono', 'Courier New', monospace">
+<p style="font-size:28px">parse_statement_list_item</p>
+<p style="font-size:28px;color:#A8A598">js/statement.rs:131</p>
+<p style="font-size:28px;color:#C9C6BB;font-family:'Noto Sans JP', Arial, sans-serif">文を読む</p>
+<p style="font-size:28px;padding:0 0 0 28px">└ parse_assignment_expression_or_higher</p>
+<p style="font-size:28px;color:#A8A598">js/expression.rs:1479</p>
+<p style="font-size:28px;color:#C9C6BB;font-family:'Noto Sans JP', Arial, sans-serif">式を読む</p>
+<p style="font-size:28px;padding:0 0 0 56px">└ parse_binary_expression_or_higher</p>
+<p style="font-size:28px;color:#A8A598">js/expression.rs:1304</p>
+<p style="font-size:28px;color:#C9C6BB;font-family:'Noto Sans JP', Arial, sans-serif">二項演算を読む</p>
+<p style="font-size:28px;padding:0 0 0 84px">└ parse_lhs_expression_or_higher</p>
+<p style="font-size:28px;color:#A8A598">js/expression.rs:748</p>
+<p style="font-size:28px;color:#C9C6BB;font-family:'Noto Sans JP', Arial, sans-serif">左辺式を読む</p>
+<p style="font-size:28px;padding:0 0 0 112px">└ parse_member_expression_rest</p>
+<p style="font-size:28px;color:#A8A598">js/expression.rs:859</p>
+<p style="font-size:28px;color:#C9C6BB;font-family:'Noto Sans JP', Arial, sans-serif">後置 (. [ ! &lt;) を読む</p>
+<p style="font-size:28px;padding:0 0 0 140px;text-decoration:line-through;color:#8E8B82">└ parse_type_arguments_in_expression</p>
+<p style="font-size:28px;color:#8E8B82;text-decoration:line-through">ts/types.rs:914</p>
+<p style="font-size:28px;color:#8E8B82;font-family:'Noto Sans JP', Arial, sans-serif">読めたのに、却下</p>
+<p style="font-size:28px;color:#FFFFFF;font-weight:700;background:#3A3F46;font-family:'Noto Sans JP', Arial, sans-serif;padding:0 0 0 56px;grid-column:span 3">← &lt; の手前に戻り、a だけを持ち帰って二項演算の段へ</p>
+<p style="font-size:28px;padding:0 0 0 84px;background:#3A3F46;font-weight:700;color:#FFFFFF">└ parse_binary_expression_rest</p>
+<p style="font-size:28px;color:#FFFFFF;background:#3A3F46;font-weight:700">js/expression.rs:1322</p>
+<p style="font-size:28px;color:#FFFFFF;background:#3A3F46;font-weight:700;font-family:'Noto Sans JP', Arial, sans-serif">&lt; を比較として読む</p>
+</div>
+<p style="font-size:32px;color:#5A5850">b は2回読まれる: 1回目は型、2回目は式</p>
+<aside>型引数としては読めたのに、認められませんでした。a だけを持ち帰って二段上がり、二項演算の段が < を比較として読み直します。b は2回読まれます。1回目は型として、2回目は式として。</aside>
+</section>

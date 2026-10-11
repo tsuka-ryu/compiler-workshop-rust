@@ -1,0 +1,37 @@
+<section id="s14" style="background:#F5F4EF;color:#1F2328;font-family:'Noto Sans JP', Arial, sans-serif;padding:96px 128px;display:flex;flex-direction:column;gap:28px">
+<p style="position:absolute;right:64px;top:40px;width:240px;text-align:right;font-size:24px;color:#8A877C">WF 14/15</p>
+<h2 style="font-size:48px;font-weight:700">もう一度、後置の段: 境界は if self.is_ts</h2>
+<div style="display:flex;flex-direction:column;background:#22262B;color:#E8E6DF;border-radius:12px">
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:24px;color:#E8E6DF;background:#2E333A;border-radius:12px 12px 0 0;padding:10px 24px">js/expression.rs — parse_member_expression_rest</p>
+<div style="display:grid;grid-template-columns:90px 1fr;gap:8px;padding:28px 28px 28px 0;font-family:'JetBrains Mono', 'Courier New', monospace">
+<p style="font-size:28px;color:#6E6B63;text-align:right">867</p>
+<p style="font-size:28px;padding:0 0 0 24px">loop {</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right">872</p>
+<p style="font-size:28px;padding:0 0 0 91px">match self.cur_kind() {</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right">873</p>
+<p style="font-size:28px;padding:0 0 0 158px">Kind::Dot =&gt; { … }</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right">878</p>
+<p style="font-size:28px;padding:0 0 0 158px">Kind::QuestionDot if allow_optional_chain =&gt; { … }</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right">908</p>
+<p style="font-size:28px;padding:0 0 0 158px">Kind::LBrack if !self.ctx.has_decorator() =&gt; { … }</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right">912</p>
+<p style="font-size:28px;padding:0 0 0 158px">kind if kind.is_template_start_of_tagged_template() =&gt; { … }</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right">915</p>
+<p style="font-size:28px;padding:0 0 0 158px">Kind::Bang <span style="color:#FFB566">if self.is_ts</span> &amp;&amp; !self.cur_token().is_on_new_line() =&gt; { … }</p>
+<p style="font-size:28px;color:#FFFFFF;text-align:right;background:#4A4F57">920</p>
+<p style="font-size:28px;padding:0 0 0 158px;background:#4A4F57;color:#FFFFFF;font-weight:700">Kind::LAngle | Kind::ShiftLeft <span style="color:#FFB566">if self.is_ts</span> =&gt; {</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right">921</p>
+<p style="font-size:28px;padding:0 0 0 225px">if let Some(arguments) = self.parse_type_arguments_in_expression() {</p>
+<p style="font-size:28px;color:#6E6B63;text-align:right"></p>
+<p style="font-size:28px;padding:0 0 0 292px;color:#8E8B82">…</p>
+<p style="font-size:28px;color:#FFFFFF;text-align:right;background:#4A4F57">937</p>
+<p style="font-size:28px;padding:0 0 0 158px;background:#4A4F57;color:#FFFFFF;font-weight:700">_ =&gt; return lhs,</p>
+</div>
+</div>
+<div style="display:flex;flex-direction:row;gap:48px">
+<p style="font-size:30px;font-weight:700;width:760px">is_ts を見ている場所: パーサー全体で54か所</p>
+<p style="font-size:30px;font-weight:700">.js なら 937 行目で抜ける → (a &lt; b) &gt; (c)</p>
+</div>
+<aside>最初に見たこの腕、もう一度見てください。if self.is_ts が付いています。TS のファイルのときだけ、この腕に入る。これが JS と TS の境界です。このフラグを見ている場所は、パーサー全体で54か所あります。.js なら、ここに入らずに最後の腕で抜けて、a < b > (c); もただの比較になります。
+WF メモ: 7枚目と同じ画面に戻ってくる。is_ts だけ色を変え、920 行目と 937 行目をハイライト。</aside>
+</section>
