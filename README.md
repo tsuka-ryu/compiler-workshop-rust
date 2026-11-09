@@ -1,10 +1,19 @@
 # compiler-workshop-rust
 
-[Richard Feldman](https://github.com/rtfeldman) 氏の Frontend Masters コース [Building a Static Type-Inferring Compiler](https://frontendmasters.com/courses/type-compiler/) ([rtfeldman/compiler-workshop-v1](https://github.com/rtfeldman/compiler-workshop-v1)) を Rust で再実装した個人学習用リポジトリです。
+コンパイラまわりの個人学習リポジトリです。コードもメモも雑多に置いています。
 
-オリジナルは TypeScript / Node.js で書かれていますが、Rust の練習を兼ねて同じ題材を Rust で書き直しています。
+もともとは [Richard Feldman](https://github.com/rtfeldman) 氏の Frontend Masters コース [Building a Static Type-Inferring Compiler](https://frontendmasters.com/courses/type-compiler/) ([rtfeldman/compiler-workshop-v1](https://github.com/rtfeldman/compiler-workshop-v1)) を Rust で再実装するリポジトリでした。いまはそこから広がり、次のものが同居しています。
 
-## 構成
+| 何があるか | 場所 |
+| --- | --- |
+| ワークショップの Rust 再実装 (tokenize → parse → 型推論 → wasm) | [src/](src/) と [下のセクション](#ワークショップの再実装) |
+| その先の toy 実装 (Pratt / resilient parsing / arena / visitor / linter など) | [src/](src/) と [docs/](docs/) |
+| JS パーサーの実装 | [src/js/](src/js/) |
+| oxc / tsc のコードリーディングのメモ | [docs/](docs/) と [demos/](demos/) |
+
+## ワークショップの再実装
+
+### 構成
 
 ```
 Source code (JS-like)
@@ -29,7 +38,7 @@ WebAssembly バイナリ
 - [src/wasm.rs](src/wasm.rs) — WebAssembly コード生成
 - [src/lib.rs](src/lib.rs) — `compile` / `compile_full` / `compile_to_wasm_full` エントリポイント
 
-## カバー範囲
+### カバー範囲
 
 オリジナル ([solutions/7](https://github.com/rtfeldman/compiler-workshop-v1/tree/main/solutions/7)) と同等の機能 + さらに JS 版にはない多相対応を実装:
 
@@ -40,7 +49,7 @@ WebAssembly バイナリ
 - ✅ wasm 生成 (LEB128 エンコード、Memory / Data セクション、関数呼び出し、IF / ELSE など)
 - ✅ monomorphization (JS 版にない: 多相関数を使用された型ごとに具体版へ展開)
 
-### Let-多相の例
+#### Let-多相の例
 
 ```js
 const id = (x) => { return x; };
@@ -50,7 +59,7 @@ const b = id("hi");    // String  ← 同じ id を異なる型で使える
 
 Algorithm W 流の generalize / instantiate を実装しているため、こうしたパターンが正しく型推論できます。
 
-### Monomorphization の例
+#### Monomorphization の例
 
 WebAssembly は多相型を直接表現できないため、上記の `id` を wasm に落とす際には:
 
@@ -100,10 +109,37 @@ insta::assert_debug_snapshot!(value);
 
 テストが fail する → `cargo insta review` で新しい AST 出力を確認 → 期待通りなら `a` で承認 → snapshot 更新。逆に意図しない変化なら `r` で却下してコードを直す。
 
-## ドキュメント
+## ワークショップの先
 
-- [docs/wasm-plan.md](docs/wasm-plan.md) — wasm 生成と monomorphization の設計方針
-- [docs/next-steps.md](docs/next-steps.md) — 今後の学習ロードマップ (Pratt parser、Resilient parsing、Span、Result、codespan-reporting、Linter、Formatter、LSP)
+ワークショップ後に足した toy 実装は [src/](src/) に `parse_pratt.rs` や `parse_resilient.rs` のような単体ファイルで置いてあり、解説を [docs/](docs/) に書いています。
+
+- [docs/next-steps.md](docs/next-steps.md): toy 言語の技術ツアー(節 11 まで実装して打ち切り)
+  - [parse-pratt.md](docs/parse-pratt.md): Pratt parser
+  - [parse-resilient.md](docs/parse-resilient.md): Resilient parsing
+  - [arena-allocator.md](docs/arena-allocator.md): arena allocator
+  - [string-interning.md](docs/string-interning.md): String interning
+  - [index-types.md](docs/index-types.md): Index 型
+  - [linter.md](docs/linter.md): Linter
+  - [visit.md](docs/visit.md) / [traverse-binary-only.md](docs/traverse-binary-only.md): Visitor / Traverse
+  - [semantic-analysis.md](docs/semantic-analysis.md): 意味解析
+- [docs/wasm-plan.md](docs/wasm-plan.md): wasm 生成と monomorphization の設計方針
+- [docs/js-parser-roadmap.md](docs/js-parser-roadmap.md): JS パーサー学習(完了)。実装は [src/js/](src/js/)
+
+## 読書メモ
+
+### oxc
+
+- [reading-oxc.md](docs/reading-oxc.md): 読む前の前提知識
+- [oxc-reading-plan.md](docs/oxc-reading-plan.md): 読書計画
+- [reading-oxc-ts.md](docs/reading-oxc-ts.md): TypeScript パーサーの深読みガイド
+- [reading-oxc-ts-notes.md](docs/reading-oxc-ts-notes.md): 上の読書メモ。[demos/](demos/) に実証用のデモがある
+- [lt-oxc-ts-parser.md](docs/lt-oxc-ts-parser.md): LT 用のメモ
+- [oxc-issue-as-exponent.md](docs/oxc-issue-as-exponent.md): `2 ** 3 as number ** 2` の issue メモ
+
+### tsc の健全性
+
+- [reading-tsc-soundness-plan.md](docs/reading-tsc-soundness-plan.md): 読書計画
+- [reading-tsc-soundness-notes.md](docs/reading-tsc-soundness-notes.md): 読書メモ
 
 ## 参考
 
